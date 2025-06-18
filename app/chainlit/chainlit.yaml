@@ -1,0 +1,34 @@
+# Chainlit configuration
+name: Stock Insight Agent
+description: AI-powered stock market analysis assistant
+
+# UI Settings
+theme: light
+hide_cot: false
+default_collapse_content: false
+default_expanded: true
+
+# Features
+features:
+  - persistence
+  - multi_modal
+  - file_upload
+  - human_feedback
+
+# UI Customization
+ui:
+  show_avatar: true
+  show_read_time: true
+  show_typing_indicator: true
+  show_progress_bar: true
+
+# Message Settings
+message_settings:
+  max_message_length: 10000
+  max_messages: 100
+  message_retention: 7d
+
+# Security
+security:
+  require_auth: false
+  allowed_origins: ["*"] 
