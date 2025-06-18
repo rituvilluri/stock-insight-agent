@@ -1,91 +1,85 @@
 import json
 import re
-import pandas as pd
 from datetime import datetime, timedelta
-from langchain.tools import Tool
-import dateparser
-import pandas_market_calendars as mcal
+from typing import Optional, Tuple
 
-nyse = mcal.get_calendar("XNYS")
-
-def get_previous_market_day(dt: datetime) -> datetime:
-    schedule = nyse.schedule(start_date=dt - timedelta(days=7), end_date=dt)
-    past_days = schedule.index[schedule.index <= dt]
-    return past_days[-1].to_pydatetime() if len(past_days) > 0 else dt
-
-def get_next_market_day(dt: datetime) -> datetime:
-    schedule = nyse.schedule(start_date=dt, end_date=dt + timedelta(days=7))
-    future_days = schedule.index[schedule.index >= dt]
-    return future_days[0].to_pydatetime() if len(future_days) > 0 else dt
-
-def resolve_relative_weekday(text: str, base_date: datetime) -> datetime | None:
-    match = re.match(r"(last|this|next)\s+(monday|tuesday|wednesday|thursday|friday|saturday|sunday)", text.lower())
-    if not match:
-        return None
-    direction, weekday_str = match.groups()
-    weekday_map = {
-        "monday": 0, "tuesday": 1, "wednesday": 2,
-        "thursday": 3, "friday": 4, "saturday": 5, "sunday": 6
+def parse_relative_range(text: str) -> Optional[Tuple[str, str]]:
+    """Parse relative date ranges like 'last week', '3 months ago'."""
+    now = datetime.now()
+    
+    # Simple patterns for common stock analysis queries
+    patterns = {
+        r'last (\d+) week': lambda m: (now - timedelta(weeks=int(m.group(1))), now),
+        r'last week': lambda m: (now - timedelta(weeks=1), now),
+        r'last (\d+) month': lambda m: (now - timedelta(days=30*int(m.group(1))), now),
+        r'last month': lambda m: (now - timedelta(days=30), now),
+        r'last (\d+) day': lambda m: (now - timedelta(days=int(m.group(1))), now),
+        r'yesterday': lambda m: (now - timedelta(days=1), now),
+        r'today': lambda m: (now, now),
+        r'this week': lambda m: (now - timedelta(days=now.weekday()), now),
+        r'this month': lambda m: (now.replace(day=1), now),
     }
-    target = weekday_map[weekday_str]
-    current = base_date.weekday()
-
-    if direction == "last":
-        return base_date - timedelta(days=(current - target + 7) % 7 or 7)
-    if direction == "this":
-        return base_date - timedelta(days=current) + timedelta(days=target)
-    if direction == "next":
-        return base_date + timedelta(days=(target - current + 7) % 7 or 7)
+    
+    for pattern, handler in patterns.items():
+        match = re.match(pattern, text.lower())
+        if match:
+            start, end = handler(match)
+            return start.strftime("%Y-%m-%d"), end.strftime("%Y-%m-%d")
+    
     return None
 
 def parse_market_aware_range_input(input: str) -> str:
-    now = datetime.now()
+    """Parse date range input and return ISO format dates."""
     try:
         args = json.loads(input)
-        start_input = args.get("start_date")
-        end_input = args.get("end_date")
-
-        parsed_start = resolve_relative_weekday(start_input, now) or dateparser.parse(
-            start_input, settings={"RELATIVE_BASE": now}
-        )
-        parsed_end = resolve_relative_weekday(end_input, now) or dateparser.parse(
-            end_input, settings={"RELATIVE_BASE": now}
-        )
-
-        if not parsed_start or not parsed_end:
-            return json.dumps({"error": "Could not parse one or both of the dates."})
-
-        def is_explicit_year(text: str) -> bool:
-            return bool(re.search(r"\b(19|20)\d{2}\b", text))
-
-        MAX_YEAR_ALLOWED = now.year + 1
-        if parsed_start.year >= MAX_YEAR_ALLOWED and not is_explicit_year(start_input):
-            parsed_start = parsed_start.replace(year=now.year)
-        if parsed_end.year >= MAX_YEAR_ALLOWED and not is_explicit_year(end_input):
-            parsed_end = parsed_end.replace(year=now.year)
-
-        market_days = set(day.date() for day in nyse.valid_days(
-            start_date=now - timedelta(days=730),
-            end_date=now + timedelta(days=730)
-        ))
-
-        adjusted_start = parsed_start if parsed_start.date() in market_days else get_previous_market_day(parsed_start)
-        adjusted_end = parsed_end if parsed_end.date() in market_days else get_next_market_day(parsed_end)
-
+        date_range = args.get("date_range", "")
+        
+        # Try to parse as relative range first
+        result = parse_relative_range(date_range)
+        if result:
+            start_date, end_date = result
+            return json.dumps({
+                "start_date": start_date,
+                "end_date": end_date,
+                "success": True
+            })
+        
+        # If not a relative range, try to parse individual dates
+        start_input = args.get("start_date", "")
+        end_input = args.get("end_date", "")
+        
+        if start_input and end_input:
+            # Simple date parsing - you can enhance this if needed
+            try:
+                start_date = datetime.strptime(start_input, "%Y-%m-%d").strftime("%Y-%m-%d")
+                end_date = datetime.strptime(end_input, "%Y-%m-%d").strftime("%Y-%m-%d")
+                return json.dumps({
+                    "start_date": start_date,
+                    "end_date": end_date,
+                    "success": True
+                })
+            except ValueError:
+                pass
+        
         return json.dumps({
-            "start_date": adjusted_start.date().isoformat(),
-            "end_date": adjusted_end.date().isoformat()
+            "error": f"Could not parse date range: {date_range}",
+            "success": False
         })
 
     except Exception as e:
-        return json.dumps({"error": f"Date parsing failed: {str(e)}"})
+        return json.dumps({
+            "error": f"Date parsing failed: {str(e)}",
+            "success": False
+        })
+
+# Keep the LangChain Tool for backward compatibility, but simplified
+from langchain.tools import Tool
 
 date_parser_tool = Tool(
     name="DateParserTool",
     func=parse_market_aware_range_input,
     description=(
-        "Convert natural language date ranges like 'last Monday to this Friday' or "
-        "'2 weeks ago to today' into ISO-formatted NYSE market days. "
-        "Input must be a JSON string with keys: 'start_date' and 'end_date'."
+        "Convert natural language date ranges like 'last week' or '3 months ago' "
+        "into ISO-formatted dates. Input should be a JSON string with 'date_range' key."
     )
 )

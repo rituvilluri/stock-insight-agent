@@ -1,12 +1,28 @@
-langchain-groq
+# Core Dependencies
 langchain>=0.3.25
+langgraph>=0.0.15
+langchain-groq
 langchain-openai~=0.3.22
+
+# LLM and API
 openai
-yfinance~=0.2.62
-pandas~=2.3.0
 python-dotenv~=1.1.0
+
+# Data Processing
+pandas~=2.3.0
+yfinance~=0.2.62
 requests~=2.32.4
-streamlit
+
+# Vector Store and Embeddings
 chromadb
+sentence-transformers
+
+# UI and Visualization
+chainlit
+plotly
+mplfinance
+
+# Utilities
 tqdm
+pytest  # For testing
 

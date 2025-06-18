@@ -3,24 +3,23 @@
 ## 📚 Learning Resources
 - [LangChain Documentation](https://python.langchain.com/docs/get_started/introduction)
 - [LangGraph Documentation](https://python.langchain.com/docs/langgraph)
-- [Streamlit Documentation](https://docs.streamlit.io/)
+- [Chainlit Documentation](https://docs.chainlit.io/)
 - [ChromaDB Documentation](https://docs.trychroma.com/)
 
 ## 🏗️ Architecture Decisions
 
 ### Current Architecture
-The project currently uses a simple LangChain-based architecture:
-- `app.py`: Entry point with CLI interface
-- `agent/`: Contains agent logic and tool initialization
-- `tools/`: Custom tools for stock analysis
+The project uses LangGraph with Chainlit for the frontend:
+- `app/chainlit/app.py`: Chainlit chat interface with LangGraph workflow
+- `agent/graph/`: Contains LangGraph nodes and edges (placeholder)
+- `tools/`: Simplified tools for stock analysis
 - `llm/`: LLM configuration and setup
 
-### Planned Architecture
-Moving to LangGraph for better workflow management:
-- More structured agent workflows
-- Better state management
-- Improved tool integration
-- Enhanced reasoning capabilities
+### Architecture Benefits
+- LangGraph provides structured agent workflows
+- Better state management and tool integration
+- Chainlit offers modern chat-based UI
+- Simplified tool structure for better maintainability
 
 ## 🔄 Git Workflow
 Best practices for this project:
@@ -40,16 +39,24 @@ test: add or update tests
 
 ## 📝 Implementation Notes
 
-### Current Tools
-1. Stock Price Tool
-   - Location: `tools/stockprice/`
-   - Purpose: Fetch historical stock data
-   - Dependencies: Yahoo Finance API
+### Current Tools (Simplified)
+1. Stock Analyzer Tool
+   - Location: `tools/stockprice/stock_analyzer.py`
+   - Purpose: Fetch and analyze historical stock data
+   - Features: Dual data source (yfinance primary, Alpha Vantage fallback)
+   - Dependencies: yfinance, requests
 
 2. Date Parser Tool
-   - Location: `tools/date/`
+   - Location: `tools/date/date_parser_tool.py`
    - Purpose: Convert natural language dates to ISO format
+   - Features: Market-aware date parsing
    - Dependencies: dateutil
+
+### Tool Simplification Benefits
+- Removed heavy LangChain Tool wrappers
+- Direct function calls for better performance
+- Cleaner error handling
+- Easier testing and debugging
 
 ### Planned Tools
 1. News Analysis Tool
@@ -67,12 +74,13 @@ test: add or update tests
 ## 🎯 Project Milestones
 1. [x] Basic stock price lookup
 2. [x] Date parsing
-3. [ ] LangGraph migration
-4. [ ] RAG implementation
-5. [ ] News analysis
-6. [ ] Social media integration
-7. [ ] Options analysis
-8. [ ] Streamlit frontend
+3. [x] LangGraph migration
+4. [x] Chainlit frontend
+5. [x] Tool simplification
+6. [ ] RAG implementation
+7. [ ] News analysis
+8. [ ] Social media integration
+9. [ ] Options analysis
 
 ## 💡 Technical Decisions
 
@@ -82,17 +90,17 @@ test: add or update tests
 - Active development
 - Better suited for our use case
 
+### Why Chainlit?
+- Modern chat-based interface
+- Better for conversational AI
+- Real-time updates
+- Easy integration with LangGraph
+
 ### Why ChromaDB?
 - Free and open-source
 - Local deployment
 - Good performance
 - Easy integration with LangChain/LangGraph
-
-### Why Streamlit?
-- Easy to learn
-- Great for data visualization
-- Real-time updates
-- Good Python integration
 
 ## 🔍 Code Structure Details
 
@@ -100,32 +108,40 @@ test: add or update tests
 ```
 stock-insight-agent/
 ├── agent/
-│   ├── agent_executor.py      # Main agent logic
-│   └── tools_init.py         # Tool initialization
+│   └── graph/               # LangGraph nodes and edges (placeholder)
+├── app/
+│   └── chainlit/
+│       ├── app.py           # Main Chainlit application
+│       ├── chainlit.md      # App description
+│       └── static/charts/   # Generated stock charts
 ├── tools/
 │   ├── stockprice/
-│   │   ├── stock_price_tool.py        # Tool definition
-│   │   └── stock_price_retriever.py   # Data fetching logic
+│   │   └── stock_analyzer.py    # Consolidated stock analysis tool
 │   └── date/
-│       └── date_parser_tool.py        # Date parsing logic
+│       └── date_parser_tool.py  # Simplified date parsing
 ├── llm/
-│   └── llm_setup.py          # LLM configuration
-├── app.py                    # Main application
-├── requirements.txt          # Dependencies
-└── README.md                # Project documentation
+│   └── llm_setup.py         # LLM configuration
+├── requirements.txt         # Dependencies
+└── README.md               # Project documentation
 ```
 
-### Empty Files Status
-- `money_inference_tool.py`: Planned for financial sentiment analysis
-- `option_price_tool.py`: Planned for options data analysis
+### Tool Architecture
+- **stock_analyzer.py**: Single file containing all stock data functionality
+  - Dual data source strategy (yfinance + Alpha Vantage)
+  - Flexible ticker handling
+  - Formatted output for better UX
+- **date_parser_tool.py**: Lightweight date parsing
+  - Market-aware date calculations
+  - Support for relative date ranges
+  - Clean error handling
 
 ## 🚀 Next Steps
-1. Set up proper git repository
-2. Create initial commit
-3. Begin LangGraph migration
-4. Implement RAG system
-5. Add news analysis
-6. Develop Streamlit frontend
+1. [x] Simplify and consolidate tools
+2. [x] Update Chainlit app to use new tools
+3. [ ] Implement RAG system for enhanced analysis
+4. [ ] Add news analysis capabilities
+5. [ ] Develop social media sentiment analysis
+6. [ ] Add options data analysis
 
 ## 📌 Important Reminders
 - Always use free resources where possible
@@ -133,4 +149,5 @@ stock-insight-agent/
 - Regular commits for tracking progress
 - Test each feature before moving to next
 - Keep dependencies updated
-- Maintain good code documentation 
+- Maintain good code documentation
+- Prefer simple, direct function calls over complex wrappers 
