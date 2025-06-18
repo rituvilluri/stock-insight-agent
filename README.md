@@ -86,7 +86,7 @@ GROQ_API_KEY=your_groq_api_key
 
 ## 📝 Notes
 - Using free resources where possible
-- Built as a learning project and interview talking point
+- Built as a learning project
 - Focus on understanding market movements and patterns
 
 ```bash
