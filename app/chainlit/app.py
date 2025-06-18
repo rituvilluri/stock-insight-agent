@@ -236,18 +236,90 @@ app = workflow.compile()
 
 @cl.on_chat_start
 async def start():
-    await cl.Message(content="Welcome to the Stock Insight Agent! How can I help you analyze stocks today?").send()
+    # Set page configuration
+    await cl.set_page_config(
+        page_title="Stock Insight Agent",
+        page_icon="📈",
+        layout="wide"
+    )
+    
+    # Create a beautiful welcome message
+    welcome_content = """
+    🚀 **Welcome to the Stock Insight Agent!** 📊
+    
+    I'm your AI-powered assistant for stock market analysis. Here's what I can help you with:
+    
+    💡 **Ask me about:**
+    • "How did NVIDIA perform over the last 3 weeks?"
+    • "What's Apple's stock performance for the past month?"
+    • "Show me Tesla's stock data from last week"
+    • "Generate a chart for Microsoft stock"
+    
+    🎯 **I can:**
+    • Parse natural language date ranges
+    • Fetch historical stock data
+    • Generate interactive stock charts
+    • Provide detailed performance analysis
+    
+    Ready to analyze some stocks? Just ask! 📈
+    """
+    
+    await cl.Message(
+        content=welcome_content,
+        author="Stock Insight Agent"
+    ).send()
 
 @cl.on_message
 async def main(message: cl.Message):
+    # Show typing indicator
+    await cl.Message(content="Analyzing your request...").send()
+    
     state = {
         "messages": [HumanMessage(content=message.content)],
         "next": "call_tool"
     }
-    result = app.invoke(state)
-    last_message = result["messages"][-1]
-    if isinstance(last_message.content, str) and last_message.content.endswith('.html'):
-        await cl.Message(content="Here's the stock chart:").send()
-        await cl.Message(content=last_message.content).send()
-    else:
-        await cl.Message(content=last_message.content).send() 
+    
+    try:
+        result = app.invoke(state)
+        last_message = result["messages"][-1]
+        
+        if isinstance(last_message.content, str) and last_message.content.endswith('.html'):
+            # For charts, send with custom styling
+            await cl.Message(
+                content="📊 **Here's your stock chart:**",
+                author="Stock Insight Agent"
+            ).send()
+            
+            # Send the chart
+            await cl.Message(
+                content=last_message.content,
+                author="Stock Insight Agent"
+            ).send()
+        else:
+            # For regular responses, format nicely
+            formatted_content = f"""
+            📈 **Analysis Complete!**
+            
+            {last_message.content}
+            
+            ---
+            *Powered by LangGraph & Chainlit*
+            """
+            
+            await cl.Message(
+                content=formatted_content,
+                author="Stock Insight Agent"
+            ).send()
+            
+    except Exception as e:
+        error_msg = f"""
+        ❌ **Oops! Something went wrong:**
+        
+        {str(e)}
+        
+        Please try rephrasing your question or ask about a different stock.
+        """
+        await cl.Message(
+            content=error_msg,
+            author="Stock Insight Agent"
+        ).send() 

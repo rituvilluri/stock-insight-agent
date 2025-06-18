@@ -21,6 +21,7 @@ ui:
   show_read_time: true
   show_typing_indicator: true
   show_progress_bar: true
+  custom_css: "/static/custom.css"
 
 # Message Settings
 message_settings:
