@@ -1,0 +1,12 @@
+langchain-groq
+langchain>=0.3.25
+langchain-openai~=0.3.22
+openai
+yfinance~=0.2.62
+pandas~=2.3.0
+python-dotenv~=1.1.0
+requests~=2.32.4
+streamlit
+chromadb
+tqdm
+

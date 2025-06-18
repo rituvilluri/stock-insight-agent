@@ -1,0 +1,20 @@
+# Ignore virtual environment folder entirely
+.venv/
+
+# Ignore environment variables file
+.env
+
+# Byte-compiled / cache files
+__pycache__/
+*.py[cod]
+
+# OS/IDE specific files
+.DS_Store
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Streamlit cache (if used)
+.streamlit/
