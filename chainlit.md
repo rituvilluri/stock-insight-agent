@@ -36,4 +36,4 @@ Try asking me:
 
 ---
 
-*Ready to start analyzing stocks? Just type your question below!* 📈 
+*Ready to start analyzing stocks? Just type your question below!* 📈

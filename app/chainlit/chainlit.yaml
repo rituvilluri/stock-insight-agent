@@ -32,4 +32,8 @@ message_settings:
 # Security
 security:
   require_auth: false
-  allowed_origins: ["*"] 
+  allowed_origins: ["*"]
+
+# Custom Avatar
+avatar:
+  assistant: "/static/avatar.svg" 
