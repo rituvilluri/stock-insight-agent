@@ -60,7 +60,7 @@ def parse_market_aware_range_input(input: str) -> str:
                 })
             except ValueError:
                 pass
-        
+
         return json.dumps({
             "error": f"Could not parse date range: {date_range}",
             "success": False

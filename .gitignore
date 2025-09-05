@@ -18,3 +18,6 @@ __pycache__/
 
 # Streamlit cache (if used)
 .streamlit/
+
+# Generated chart files (large HTML files)
+app/chainlit/static/charts/*.html
