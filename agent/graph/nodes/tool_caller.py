@@ -15,6 +15,7 @@ import json
 # Import the simplified tools
 from tools.date.date_parser_tool import parse_relative_range
 from tools.stockprice.stock_analyzer import get_stock_data
+from tools.news.news_analyzer_tool import NewsAnalyzerTool
 
 class AgentState(TypedDict):
     messages: Annotated[List[BaseMessage], "The messages in the conversation"]
@@ -51,11 +52,16 @@ def get_stock_chart(symbol: str, period: str = "3mo") -> str:
     except Exception as e:
         return f"Error generating chart for {symbol}: {str(e)}"
 
+# Initialize news analyzer tool
+news_analyzer = NewsAnalyzerTool()
+
 # Tool registry
 tool_registry = {
     "parse_date_range": parse_relative_range,
     "get_stock_data": get_stock_data,
     "get_stock_chart": get_stock_chart,
+    "analyze_news_sentiment": news_analyzer.analyze_news_sentiment,
+    "search_news_by_symbol": news_analyzer.search_news_by_symbol,
 }
 
 # LLM prompt for tool selection
@@ -69,6 +75,8 @@ prompt = ChatPromptTemplate.from_messages([
     - parse_date_range: Parse natural language date ranges like "last 3 weeks" into ISO dates
     - get_stock_data: Get historical stock data (requires ticker, start_date, end_date)
     - get_stock_chart: Generate stock price chart HTML (requires symbol and optional period)
+    - analyze_news_sentiment: Analyze news sentiment for a stock symbol (requires symbol, optional days_back)
+    - search_news_by_symbol: Search news articles by stock symbol (requires symbol, optional limit)
     
     IMPORTANT: Return ONLY ONE tool call at a time. For requests like "how did NVIDIA do over the last week?":
     1. First call parse_date_range to get the date range
@@ -103,7 +111,17 @@ prompt = ChatPromptTemplate.from_messages([
         "tool": "get_stock_chart",
         "parameters": {{"symbol": "NVDA", "period": "3mo"}}
     }}
-    
+
+    {{
+        "tool": "analyze_news_sentiment",
+        "parameters": {{"symbol": "TSLA", "days_back": 7}}
+    }}
+
+    {{
+        "tool": "search_news_by_symbol",
+        "parameters": {{"symbol": "NVDA", "limit": 10}}
+    }}
+
     Do NOT return multiple tool calls or explanatory text. Return ONLY the JSON object."""),
     MessagesPlaceholder(variable_name="messages"),
 ])
@@ -186,6 +204,12 @@ Common mappings:
                     
             elif tool_name == "get_stock_data":
                 # get_stock_data expects keyword arguments
+                result = tool_func(**parameters)
+            elif tool_name == "analyze_news_sentiment":
+                # analyze_news_sentiment expects keyword arguments
+                result = tool_func(**parameters)
+            elif tool_name == "search_news_by_symbol":
+                # search_news_by_symbol expects keyword arguments
                 result = tool_func(**parameters)
             else:
                 result = tool_func(**parameters)
