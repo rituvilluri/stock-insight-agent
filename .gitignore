@@ -21,3 +21,6 @@ __pycache__/
 
 # Generated chart files (large HTML files)
 app/chainlit/static/charts/*.html
+
+# Claude Code memory and session data (personal, not project config)
+.claude/
