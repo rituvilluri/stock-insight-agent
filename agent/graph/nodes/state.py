@@ -261,3 +261,8 @@ class AgentState(TypedDict, total=False):
     # Chainlit detects this field and renders it as an interactive chart.
     # None if chart_requested was False, or if generation failed.
     # Read by: Chainlit app.py.
+
+    chart_error: Optional[str]
+    # Written by Node 10 if chart generation fails. None on success.
+    # Added post-Step-1 to comply with CLAUDE.md rule: all nodes must
+    # write to their *_error state field on failure.
