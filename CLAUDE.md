@@ -12,9 +12,12 @@ Single-agent LangGraph architecture. NOT multi-agent.
 - docs/DecisionLog.md: 11 ADR-format architectural decisions
 
 ## Current Codebase State
-Partially working prototype. Needs a full multi-node rebuild per TDD.
+Phase 1 rebuild in progress. Do not treat existing prototype files as sacred.
 
-What exists:
+Phase 1 nodes completed:
+- agent/graph/nodes/state.py: ✅ AgentState TypedDict (28 fields, all nodes documented)
+
+Prototype files (will be replaced, do not modify):
 - agent/graph/nodes/tool_caller.py: monolithic god-node; also contains inline chart logic
 - agent/graph/edges/decision_router.py: routes to END if last message is AIMessage; duplicates AgentState
 - agent/graph/workflow.py: single-node graph, tool_caller + conditional edge to END
@@ -22,25 +25,24 @@ What exists:
 - tools/stockprice/stock_analyzer.py: yfinance primary, Alpha Vantage fallback
 - tools/date/date_parser_tool.py: regex-based relative date parsing
 - tools/news/news_scraper.py: RSS-based scraper; not wired into graph
-- llm/llm_setup.py: Groq llama-3.1-8b-instant, temperature=0.7, max_tokens=512
 
-Known issues to fix during rebuild:
-- temperature=0.7 is wrong for classifier/extractor nodes; use temperature=0 for structured JSON output
-- max_tokens=512 is too low for response_synthesizer; use a separate LLM config with higher token limit
-- AgentState is duplicated in tool_caller.py and decision_router.py; consolidate into state.py
-- Do not treat existing code as sacred; refactor or replace as needed
+LLM config (llm/llm_setup.py) — needs two configs during rebuild:
+- llm_classifier: temperature=0, max_tokens=256 (intent, ticker, date nodes — structured JSON output)
+- llm_synthesizer: temperature=0.3, max_tokens=1024 (response_synthesizer — narrative output)
+- AgentState duplication in tool_caller.py and decision_router.py is resolved; both will import from state.py
 
 ## Build Sequence (Phase 1 - current focus)
 Read docs/TDD.md for full node specs before implementing any step.
+Done when: all tests in tests/test_<node>.py pass and the node is committed.
 
-1. agent/graph/nodes/state.py (AgentState TypedDict, all fields)
-2. intent_classifier.py + tests/test_intent_classifier.py
-3. ticker_resolver.py + tests/test_ticker_resolver.py
-4. date_parser.py + tests/test_date_parser.py
-5. data_fetcher.py + tests/test_data_fetcher.py
-6. chart_generator.py + tests/test_chart_generator.py
-7. response_synthesizer.py + tests/test_response_synthesizer.py
-8. error_handler.py + tests/test_error_handler.py
+1. ✅ agent/graph/nodes/state.py (AgentState TypedDict, all fields) — committed
+2. agent/graph/nodes/intent_classifier.py + tests/test_intent_classifier.py
+3. agent/graph/nodes/ticker_resolver.py + tests/test_ticker_resolver.py
+4. agent/graph/nodes/date_parser.py + tests/test_date_parser.py
+5. agent/graph/nodes/data_fetcher.py + tests/test_data_fetcher.py
+6. agent/graph/nodes/chart_generator.py + tests/test_chart_generator.py
+7. agent/graph/nodes/response_synthesizer.py + tests/test_response_synthesizer.py
+8. agent/graph/nodes/error_handler.py + tests/test_error_handler.py
 9. workflow.py rebuild (wire all Phase 1 nodes with conditional edges)
 10. app/chainlit/app.py update (read final_response from state, not messages[-1])
 11. LangSmith tracing
@@ -53,17 +55,43 @@ Phase 3: rag_pipeline with ChromaDB
 - One node per session; write unit tests alongside each node
 - Do NOT touch workflow.py while implementing individual nodes
 - Do NOT touch app/chainlit/app.py until workflow.py is rebuilt
-- Commit after each node passes tests
+- Commit after each node passes tests (no Co-Authored-By in commit messages)
 - No LangChain Tool wrappers; use direct Python function calls
 - No print statements in node files; use logging
 - All nodes must write to their *_error state field on failure
 
+Every node file must follow this structure:
+```python
+import logging
+from agent.graph.nodes.state import AgentState
+
+logger = logging.getLogger(__name__)
+
+def <node_name>(state: AgentState) -> AgentState:
+    try:
+        # ... logic here ...
+        return {**state, "<output_field>": result, "<node>_error": None}
+    except Exception as e:
+        logger.error(f"<node_name> failed: {e}")
+        return {**state, "<node>_error": str(e)}
+```
+
 ## Commands
 ```bash
+# Activate virtual environment first (required before any other command)
 source .venv/bin/activate
+
+# Run the app
 PYTHONPATH=. chainlit run app/chainlit/app.py
+
+# Run all tests
 PYTHONPATH=. pytest tests/
-PYTHONPATH=. pytest tests/test_intent_classifier.py
+
+# Run a single node's tests
+PYTHONPATH=. pytest tests/test_intent_classifier.py -v
+
+# Create tests directory (one-time setup before Step 2)
+mkdir -p tests && touch tests/__init__.py
 ```
 
 ## Environment Variables (.env)
