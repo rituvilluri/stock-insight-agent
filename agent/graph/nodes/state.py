@@ -266,3 +266,6 @@ class AgentState(TypedDict, total=False):
     # Written by Node 10 if chart generation fails. None on success.
     # Added post-Step-1 to comply with CLAUDE.md rule: all nodes must
     # write to their *_error state field on failure.
+
+    synthesizer_error: Optional[str]
+    # Written by Node 9 if response generation fails. None on success.

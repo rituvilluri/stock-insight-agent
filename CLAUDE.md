@@ -42,10 +42,9 @@ Done when: all tests in tests/test_<node>.py pass and the node is committed.
 5. agent/graph/nodes/data_fetcher.py + tests/test_data_fetcher.py
 6. agent/graph/nodes/chart_generator.py + tests/test_chart_generator.py
 7. agent/graph/nodes/response_synthesizer.py + tests/test_response_synthesizer.py
-8. agent/graph/nodes/error_handler.py + tests/test_error_handler.py
-9. workflow.py rebuild (wire all Phase 1 nodes with conditional edges)
-10. app/chainlit/app.py update (read final_response from state, not messages[-1])
-11. LangSmith tracing
+8. workflow.py rebuild (wire all Phase 1 nodes with conditional edges)
+9. app/chainlit/app.py update (read final_response from state, not messages[-1])
+10. LangSmith tracing
 
 Phase 2 (after Phase 1 committed and tested): news_retriever, reddit_sentiment
 Phase 3: rag_pipeline with ChromaDB
