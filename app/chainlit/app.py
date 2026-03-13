@@ -1,97 +1,141 @@
+"""
+Chainlit UI for the Stock Insight Agent.
+
+Reads from the new AgentState fields written by Phase 1 nodes:
+  - response_text      : the LLM-generated narrative (Node 9)
+  - sources_cited      : list of source dicts for clickable links (Node 9)
+  - chart_data         : Plotly JSON string (Node 10)
+  - synthesizer_error  : set if Node 9 failed
+  - chart_error        : set if Node 10 failed
+
+No longer reads messages[-1] or the PLOTLY_JSON: prefix hack from
+the prototype tool_caller. Those are replaced by explicit state fields.
+"""
+
+import logging
+
 import chainlit as cl
-from langchain_core.messages import HumanMessage
-import json
 import plotly.io as pio
 
-# Import the compiled workflow from the new structure
-from agent.graph.workflow import app
+from agent.graph.workflow import app as graph
+
+logger = logging.getLogger(__name__)
+
+AUTHOR = "Stock Insight Agent"
+
+
+# ---------------------------------------------------------------------------
+# Chat start
+# ---------------------------------------------------------------------------
 
 @cl.on_chat_start
 async def start():
-    # Create a beautiful welcome message
-    welcome_content = """🚀 **Welcome to the Stock Insight Agent!** 📊
-
-I'm your AI-powered assistant for stock market analysis. Here's what I can help you with:
-
-💡 **Ask me about:**
-• "How did NVIDIA perform over the last 3 weeks?"
-• "What's Apple's stock performance for the past month?"
-• "Show me Tesla's stock data from last week"
-• "Generate a chart for Microsoft stock"
-
-🎯 **I can:**
-• Parse natural language date ranges
-• Fetch historical stock data
-• Generate interactive stock charts
-• Provide detailed performance analysis
-
-Ready to analyze some stocks? Just ask! 📈"""
-    
     await cl.Message(
-        content=welcome_content,
-        author="Stock Insight Agent"
+        content=(
+            "**Welcome to the Stock Insight Agent**\n\n"
+            "Ask me about any stock's performance over a time period. Examples:\n\n"
+            "- *How did NVIDIA do last month?*\n"
+            "- *Show me a chart of Tesla from Q1 2024*\n"
+            "- *What happened with Apple around Q2 2024 earnings?*\n\n"
+            "I can retrieve price data, generate interactive charts, "
+            "and provide a narrative analysis with source citations."
+        ),
+        author=AUTHOR,
     ).send()
+
+
+# ---------------------------------------------------------------------------
+# Message handler
+# ---------------------------------------------------------------------------
 
 @cl.on_message
 async def main(message: cl.Message):
-    # Show typing indicator
-    await cl.Message(
-        content="Analyzing your request...",
-        author="Stock Insight Agent"
-    ).send()
-    
-    state = {
-        "messages": [HumanMessage(content=message.content)],
-        "next": "call_tool"
+    # Build the initial state for the graph
+    initial_state = {
+        "user_message": message.content,
+        "user_config": {},   # no user-supplied API keys yet (Phase 5)
     }
-    
+
     try:
-        result = app.invoke(state)
-        last_message = result["messages"][-1]
-        
-        content = last_message.content
+        # Run the LangGraph workflow synchronously.
+        # Chainlit runs on asyncio; graph.invoke is synchronous but fast enough
+        # for a portfolio project. Phase 5 can switch to graph.ainvoke.
+        result = graph.invoke(initial_state)
 
-        # Handle inline Plotly JSON payload from the chart tool
-        if isinstance(content, str) and content.startswith("PLOTLY_JSON:"):
-            fig_json = content[len("PLOTLY_JSON:"):]
-            fig = pio.from_json(fig_json)
-
-            await cl.Message(
-                content="📊 **Here's your stock chart:**",
-                author="Stock Insight Agent",
-                elements=[cl.Plotly(name="Stock Chart", figure=fig)]
-            ).send()
-
-        elif isinstance(content, str) and content.endswith('.html'):
-            # Fallback: raw HTML path (shown as text if HTML rendering disabled)
-            await cl.Message(
-                content="📊 **Here's your stock chart:**",
-                author="Stock Insight Agent"
-            ).send()
-
-            await cl.Message(
-                content=content,
-                author="Stock Insight Agent"
-            ).send()
-
-        else:
-            # For regular responses, format nicely
-            formatted_content = f"📈 **Analysis Complete!**\n\n{content}"
-            
-            await cl.Message(
-                content=formatted_content,
-                author="Stock Insight Agent"
-            ).send()
-            
     except Exception as e:
-        error_msg = f"""
-        ❌ **Oops! Something went wrong:**
-        
-        {str(e)}
-        
-        Please try rephrasing your question or ask about a different stock.
-        """
+        logger.error("Graph invocation failed: %s", e)
         await cl.Message(
-            content=error_msg,
-            author="Stock Insight Agent"
+            content=(
+                f"Something went wrong running the analysis:\n\n`{e}`\n\n"
+                "Please try rephrasing your question."
+            ),
+            author=AUTHOR,
+        ).send()
+        return
+
+    # ------------------------------------------------------------------
+    # 1. Send the narrative response
+    # ------------------------------------------------------------------
+    response_text = result.get("response_text")
+    synthesizer_error = result.get("synthesizer_error")
+
+    if response_text:
+        await cl.Message(content=response_text, author=AUTHOR).send()
+    elif synthesizer_error:
+        await cl.Message(
+            content=f"I wasn't able to generate a response: {synthesizer_error}",
+            author=AUTHOR,
+        ).send()
+        return
+    else:
+        # Fallback — should not happen in normal operation
+        await cl.Message(
+            content="No response was generated. Please try again.",
+            author=AUTHOR,
+        ).send()
+        return
+
+    # ------------------------------------------------------------------
+    # 2. Send sources as a formatted list (if any)
+    # ------------------------------------------------------------------
+    sources_cited = result.get("sources_cited") or []
+    if sources_cited:
+        source_lines = []
+        for s in sources_cited:
+            label = s.get("title", "Source")
+            url = s.get("url", "")
+            source_type = s.get("type", "")
+            icon = {"news": "📰", "reddit": "💬", "filing": "📄"}.get(source_type, "🔗")
+            if url:
+                source_lines.append(f"{icon} [{label}]({url})")
+            else:
+                source_lines.append(f"{icon} {label}")
+
+        sources_text = "**Sources**\n\n" + "\n\n".join(source_lines)
+        await cl.Message(content=sources_text, author=AUTHOR).send()
+
+    # ------------------------------------------------------------------
+    # 3. Render the Plotly chart (if generated)
+    # ------------------------------------------------------------------
+    chart_data = result.get("chart_data")
+    chart_error = result.get("chart_error")
+
+    if chart_data:
+        try:
+            fig = pio.from_json(chart_data)
+            await cl.Message(
+                content="",
+                author=AUTHOR,
+                elements=[cl.Plotly(name="Stock Chart", figure=fig, display="inline")],
+            ).send()
+        except Exception as e:
+            logger.error("Chart rendering failed: %s", e)
+            await cl.Message(
+                content=f"Chart data was generated but could not be rendered: {e}",
+                author=AUTHOR,
+            ).send()
+    elif chart_error:
+        await cl.Message(
+            content=f"Chart generation failed: {chart_error}",
+            author=AUTHOR,
         ).send()
