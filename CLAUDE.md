@@ -36,15 +36,15 @@ Read docs/TDD.md for full node specs before implementing any step.
 Done when: all tests in tests/test_<node>.py pass and the node is committed.
 
 1. ✅ agent/graph/nodes/state.py (AgentState TypedDict, all fields) — committed
-2. agent/graph/nodes/intent_classifier.py + tests/test_intent_classifier.py
-3. agent/graph/nodes/ticker_resolver.py + tests/test_ticker_resolver.py
-4. agent/graph/nodes/date_parser.py + tests/test_date_parser.py
-5. agent/graph/nodes/data_fetcher.py + tests/test_data_fetcher.py
-6. agent/graph/nodes/chart_generator.py + tests/test_chart_generator.py
-7. agent/graph/nodes/response_synthesizer.py + tests/test_response_synthesizer.py
-8. workflow.py rebuild (wire all Phase 1 nodes with conditional edges)
-9. app/chainlit/app.py update (read final_response from state, not messages[-1])
-10. LangSmith tracing
+2. ✅ agent/graph/nodes/intent_classifier.py + tests/test_intent_classifier.py — committed
+3. ✅ agent/graph/nodes/ticker_resolver.py + tests/test_ticker_resolver.py — committed
+4. ✅ agent/graph/nodes/date_parser.py + tests/test_date_parser.py — committed
+5. ✅ agent/graph/nodes/data_fetcher.py + tests/test_data_fetcher.py — committed
+6. ✅ agent/graph/nodes/chart_generator.py + tests/test_chart_generator.py — committed
+7. ✅ agent/graph/nodes/response_synthesizer.py + tests/test_response_synthesizer.py — committed
+8. ✅ workflow.py rebuild (wire all Phase 1 nodes with conditional edges) — committed
+9. ✅ app/chainlit/app.py update (reads response_text/chart_data from state) — committed
+10. ✅ LangSmith tracing (LANGCHAIN_TRACING_V2, LANGCHAIN_PROJECT set in .env)
 
 Phase 2 (after Phase 1 committed and tested): news_retriever, reddit_sentiment
 Phase 3: rag_pipeline with ChromaDB
