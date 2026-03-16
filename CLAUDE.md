@@ -46,7 +46,12 @@ Done when: all tests in tests/test_<node>.py pass and the node is committed.
 9. ✅ app/chainlit/app.py update (reads response_text/chart_data from state) — committed
 10. ✅ LangSmith tracing (LANGCHAIN_TRACING_V2, LANGCHAIN_PROJECT set in .env)
 
-Phase 2 (after Phase 1 committed and tested): news_retriever, reddit_sentiment
+Phase 2 (in progress):
+- ✅ Session context memory (app.py + date_parser.py guard) — committed
+- ⬜ Node 5: news_retriever.py + tests/test_news_retriever.py
+- ⬜ Node 6: reddit_sentiment.py + tests/test_reddit_sentiment.py (needs Reddit API credentials)
+- ⬜ workflow.py update (add Nodes 5 and 6 to stock_analysis path)
+
 Phase 3: rag_pipeline with ChromaDB
 
 ## Rules
@@ -97,6 +102,10 @@ mkdir -p tests && touch tests/__init__.py
 ```
 GROQ_API_KEY=                    # Required
 ALPHA_VANTAGE_API_KEY=           # Optional fallback
+NEWSAPI_KEY=                     # Phase 2 Node 5; Google RSS fallback used if absent
+REDDIT_CLIENT_ID=                # Phase 2 Node 6
+REDDIT_CLIENT_SECRET=            # Phase 2 Node 6
+REDDIT_USER_AGENT=stock-insight-agent/1.0  # Phase 2 Node 6
 CHROMA_PERSIST_DIR=data/vector_store   # Phase 3, local ChromaDB
 LANGSMITH_API_KEY=               # Phase 1 step 11
 LANGCHAIN_TRACING_V2=true        # Phase 1 step 11

@@ -50,10 +50,14 @@ async def start():
 
 @cl.on_message
 async def main(message: cl.Message):
-    # Build the initial state for the graph
+    # Seed initial state with context from the previous turn (if any).
+    # This allows follow-up queries like "show me a chart of that" to work
+    # without the user repeating the ticker and date range.
+    last_context = cl.user_session.get("last_context") or {}
     initial_state = {
         "user_message": message.content,
         "user_config": {},   # no user-supplied API keys yet (Phase 5)
+        **last_context,
     }
 
     try:
@@ -72,6 +76,14 @@ async def main(message: cl.Message):
             author=AUTHOR,
         ).send()
         return
+
+    # ------------------------------------------------------------------
+    # 0. Persist context for follow-up queries
+    # ------------------------------------------------------------------
+    context_fields = ("ticker", "company_name", "start_date", "end_date", "date_context")
+    saved = {k: result[k] for k in context_fields if result.get(k)}
+    if saved:
+        cl.user_session.set("last_context", saved)
 
     # ------------------------------------------------------------------
     # 1. Send the narrative response

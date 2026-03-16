@@ -436,7 +436,21 @@ def parse_dates(state: AgentState) -> AgentState:
                 "date_error": None,
             }
 
-        # All layers failed — no date range could be determined
+        # All layers failed — check if dates were seeded from session context
+        seeded_start = state.get("start_date", "")
+        seeded_end = state.get("end_date", "")
+        if seeded_start and seeded_end:
+            logger.info(
+                "parse_dates: no date in message; preserving session context %s to %s",
+                seeded_start, seeded_end,
+            )
+            return {
+                **state,
+                "date_missing": False,
+                "include_current_snapshot": include_current,
+                "date_error": None,
+            }
+
         logger.warning("parse_dates: could not determine a date range")
         return {
             **state,
