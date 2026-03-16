@@ -10,8 +10,7 @@ Nodes wired (Phase 2):
   9  Response Synthesizer — synthesize_response
   10 Chart Generator      — generate_chart
 
-Nodes deferred to Phase 2/3 (stubs, paths route around them):
-  6  Reddit Sentiment Analyzer
+Nodes deferred to Phase 3 (stubs, paths route around them):
   7  RAG Retriever
   8  Options Analyzer
 
@@ -45,6 +44,7 @@ from agent.graph.nodes.ticker_resolver import resolve_ticker
 from agent.graph.nodes.date_parser import parse_dates
 from agent.graph.nodes.data_fetcher import fetch_price_data
 from agent.graph.nodes.news_retriever import retrieve_news
+from agent.graph.nodes.reddit_sentiment import analyze_reddit_sentiment
 from agent.graph.nodes.response_synthesizer import synthesize_response
 from agent.graph.nodes.chart_generator import generate_chart
 
@@ -143,6 +143,7 @@ def create_workflow():
     graph.add_node("parse_dates",        parse_dates)
     graph.add_node("fetch_price",        fetch_price_data)
     graph.add_node("retrieve_news",      retrieve_news)
+    graph.add_node("reddit_sentiment",   analyze_reddit_sentiment)
     graph.add_node("synthesize",         synthesize_response)
     graph.add_node("generate_chart",     generate_chart)
 
@@ -181,8 +182,11 @@ def create_workflow():
         },
     )
 
-    # After Node 5: always proceed to synthesizer
-    graph.add_edge("retrieve_news", "synthesize")
+    # After Node 5: proceed to Reddit sentiment
+    graph.add_edge("retrieve_news",    "reddit_sentiment")
+
+    # After Node 6: always proceed to synthesizer
+    graph.add_edge("reddit_sentiment", "synthesize")
 
     # After Node 9: optionally generate chart
     graph.add_conditional_edges(

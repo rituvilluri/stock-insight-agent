@@ -26,6 +26,9 @@ mplfinance
 newsapi-python
 feedparser
 
+# Reddit sentiment
+praw
+
 # Utilities
 tqdm
 pytest  # For testing

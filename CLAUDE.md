@@ -49,8 +49,8 @@ Done when: all tests in tests/test_<node>.py pass and the node is committed.
 Phase 2 (in progress):
 - ✅ Session context memory (app.py + date_parser.py guard) — committed
 - ⬜ Node 5: news_retriever.py + tests/test_news_retriever.py
-- ⬜ Node 6: reddit_sentiment.py + tests/test_reddit_sentiment.py (needs Reddit API credentials)
-- ✅ workflow.py update (Node 5 wired; Node 6 pending Reddit credentials)
+- ✅ Node 6: reddit_sentiment.py + tests/test_reddit_sentiment.py — committed (credentials pending)
+- ✅ workflow.py update (Nodes 5 and 6 wired)
 
 Phase 3: rag_pipeline with ChromaDB
 
