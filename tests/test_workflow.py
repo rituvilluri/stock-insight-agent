@@ -100,17 +100,17 @@ def test_route_fetch_price_chart_request_to_generate_chart():
 
 def test_route_fetch_price_stock_analysis_to_synthesize():
     state = _state(intent="stock_analysis")
-    assert route_after_fetch_price(state) == "synthesize"
+    assert route_after_fetch_price(state) == "retrieve_news"
 
 
-def test_route_fetch_price_general_lookup_to_synthesize():
+def test_route_fetch_price_general_lookup_to_retrieve_news():
     state = _state(intent="general_lookup")
-    assert route_after_fetch_price(state) == "synthesize"
+    assert route_after_fetch_price(state) == "retrieve_news"
 
 
-def test_route_fetch_price_options_view_to_synthesize():
+def test_route_fetch_price_options_view_to_retrieve_news():
     state = _state(intent="options_view")
-    assert route_after_fetch_price(state) == "synthesize"
+    assert route_after_fetch_price(state) == "retrieve_news"
 
 
 # ---------------------------------------------------------------------------

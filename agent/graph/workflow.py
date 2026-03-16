@@ -1,16 +1,16 @@
 """
-LangGraph workflow for the Stock Insight Agent — Phase 1.
+LangGraph workflow for the Stock Insight Agent — Phase 2.
 
-Nodes wired (Phase 1):
-  1  Intent Classifier   — classify_intent
-  2  Ticker Resolver     — resolve_ticker
-  3  Date Parser         — parse_dates
-  4  Price Data Fetcher  — fetch_price_data
+Nodes wired (Phase 2):
+  1  Intent Classifier    — classify_intent
+  2  Ticker Resolver      — resolve_ticker
+  3  Date Parser          — parse_dates
+  4  Price Data Fetcher   — fetch_price_data
+  5  News Retriever       — retrieve_news
   9  Response Synthesizer — synthesize_response
-  10 Chart Generator     — generate_chart
+  10 Chart Generator      — generate_chart
 
 Nodes deferred to Phase 2/3 (stubs, paths route around them):
-  5  News Retriever
   6  Reddit Sentiment Analyzer
   7  RAG Retriever
   8  Options Analyzer
@@ -18,19 +18,21 @@ Nodes deferred to Phase 2/3 (stubs, paths route around them):
 Routing overview:
   Node 1 → Node 2 → Node 3 → route_after_date_parser
     date_missing or intent="unknown"  → synthesize
-    intent="chart_request"            → fetch_price → generate_chart → END
-    intent="options_view"             → synthesize (no options node yet)
-    all other intents                 → fetch_price → synthesize
+    all other intents                 → fetch_price
+
+  route_after_fetch_price
+    intent="chart_request"            → generate_chart → END
+    all other intents                 → retrieve_news → synthesize
 
   route_after_synthesizer
     chart_requested=True              → generate_chart → END
     else                              → END
 
 Why keep chart_request separate from chart_requested?
-  intent="chart_request" skips the synthesizer entirely — the user
-  explicitly asked for a chart, not a narrative.  The chart_requested
-  flag (which can be True alongside any intent) triggers chart
-  generation AFTER the synthesizer has run.
+  intent="chart_request" skips news retrieval and the synthesizer
+  entirely — the user explicitly asked for a chart, not a narrative.
+  The chart_requested flag (which can be True alongside any intent)
+  triggers chart generation AFTER the synthesizer has run.
 """
 
 import logging
@@ -42,6 +44,7 @@ from agent.graph.nodes.intent_classifier import classify_intent
 from agent.graph.nodes.ticker_resolver import resolve_ticker
 from agent.graph.nodes.date_parser import parse_dates
 from agent.graph.nodes.data_fetcher import fetch_price_data
+from agent.graph.nodes.news_retriever import retrieve_news
 from agent.graph.nodes.response_synthesizer import synthesize_response
 from agent.graph.nodes.chart_generator import generate_chart
 
@@ -83,12 +86,10 @@ def route_after_fetch_price(state: AgentState) -> str:
     """
     Decide which node runs after Node 4 (Price Data Fetcher).
 
-    chart_request intent: user wants a chart only, skip the narrative
-    synthesizer and go straight to chart generation.
+    chart_request intent: user wants a chart only — skip news retrieval
+    and the synthesizer, go straight to chart generation.
 
-    All other intents: proceed to the synthesizer to generate a
-    natural-language response (chart generation may follow if
-    chart_requested=True).
+    All other intents: proceed to news retrieval (Node 5) before synthesis.
     """
     intent = state.get("intent", "stock_analysis")
 
@@ -96,8 +97,8 @@ def route_after_fetch_price(state: AgentState) -> str:
         logger.debug("route_after_fetch_price → generate_chart (chart_request intent)")
         return "generate_chart"
 
-    logger.debug("route_after_fetch_price → synthesize (intent=%s)", intent)
-    return "synthesize"
+    logger.debug("route_after_fetch_price → retrieve_news (intent=%s)", intent)
+    return "retrieve_news"
 
 
 def route_after_synthesizer(state: AgentState) -> str:
@@ -141,6 +142,7 @@ def create_workflow():
     graph.add_node("resolve_ticker",     resolve_ticker)
     graph.add_node("parse_dates",        parse_dates)
     graph.add_node("fetch_price",        fetch_price_data)
+    graph.add_node("retrieve_news",      retrieve_news)
     graph.add_node("synthesize",         synthesize_response)
     graph.add_node("generate_chart",     generate_chart)
 
@@ -169,15 +171,18 @@ def create_workflow():
         },
     )
 
-    # After Node 4: branch on intent (chart_request skips synthesizer)
+    # After Node 4: branch on intent (chart_request skips news + synthesizer)
     graph.add_conditional_edges(
         "fetch_price",
         route_after_fetch_price,
         {
-            "synthesize":     "synthesize",
+            "retrieve_news":  "retrieve_news",
             "generate_chart": "generate_chart",
         },
     )
+
+    # After Node 5: always proceed to synthesizer
+    graph.add_edge("retrieve_news", "synthesize")
 
     # After Node 9: optionally generate chart
     graph.add_conditional_edges(
@@ -196,7 +201,7 @@ def create_workflow():
     # Compile
     # ------------------------------------------------------------------
     compiled = graph.compile()
-    logger.info("Stock Insight Agent workflow compiled (Phase 1)")
+    logger.info("Stock Insight Agent workflow compiled (Phase 2)")
     return compiled
 
 
