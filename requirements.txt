@@ -22,6 +22,10 @@ chainlit
 plotly
 mplfinance
 
+# News
+newsapi-python
+feedparser
+
 # Utilities
 tqdm
 pytest  # For testing
