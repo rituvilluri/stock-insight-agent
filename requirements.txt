@@ -25,6 +25,7 @@ mplfinance
 # News
 newsapi-python
 feedparser
+lxml
 
 # Reddit sentiment
 praw
