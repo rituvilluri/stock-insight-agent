@@ -1,5 +1,5 @@
 """
-LangGraph workflow for the Stock Insight Agent — Phase 2 (parallel retrieval).
+LangGraph workflow for the Stock Insight Agent — Phase 2 + Node 8 (Options).
 
 Nodes wired:
   1  Intent Classifier    — classify_intent
@@ -8,16 +8,17 @@ Nodes wired:
   4  Price Data Fetcher   — fetch_price_data
   5  News Retriever       — retrieve_news      ─┐ parallel via Send()
   6  Reddit Sentiment     — reddit_sentiment   ─┘
+  8  Options Analyzer     — analyze_options
   9  Response Synthesizer — synthesize_response
   10 Chart Generator      — generate_chart
 
-Nodes deferred (stubs, paths route around them):
+Nodes deferred (stub, path routes around it):
   7  RAG Retriever
-  8  Options Analyzer
 
 Routing overview:
   Node 1 → Node 2 → Node 3 → route_after_date_parser
     date_missing or intent="unknown"  → synthesize
+    intent="options_view"             → analyze_options → synthesize
     all other intents                 → fetch_price
 
   route_after_fetch_price
@@ -28,6 +29,12 @@ Routing overview:
   route_after_synthesizer
     chart_requested=True              → generate_chart → END
     else                              → END
+
+Why options_view routes directly to analyze_options (skipping fetch_price)?
+  Options analysis is forward-looking and options-specific. The price context
+  embedded in state.price_data (close_price) is used by the Greeks calculation,
+  but a historical OHLCV fetch would add latency without adding relevant
+  insight for options_view intent. The current snapshot is enough.
 
 Why keep chart_request separate from chart_requested?
   intent="chart_request" skips news retrieval and the synthesizer
@@ -48,6 +55,7 @@ from agent.graph.nodes.date_parser import parse_dates
 from agent.graph.nodes.data_fetcher import fetch_price_data
 from agent.graph.nodes.news_retriever import retrieve_news
 from agent.graph.nodes.reddit_sentiment import analyze_reddit_sentiment
+from agent.graph.nodes.options_analyzer import analyze_options
 from agent.graph.nodes.response_synthesizer import synthesize_response
 from agent.graph.nodes.chart_generator import generate_chart
 
@@ -66,13 +74,11 @@ def route_after_date_parser(state: AgentState) -> str:
       - date_missing: no time window to query APIs
       - unknown intent: user message is not stock-related
 
-    Routes to "fetch_price" for all data-bearing intents.
-    options_view routes to "fetch_price" in Phase 1 because Node 8
-    (Options Analyzer) is not yet implemented; fetch_price provides
-    the base price context the synthesizer can at least use.
+    Routes to "analyze_options" for options_view intent — Node 8 fetches
+    the live options chain and does not need a historical date range.
 
-    chart_request also routes to "fetch_price" because the chart needs
-    daily price data from Node 4.
+    Routes to "fetch_price" for all other data-bearing intents, including
+    chart_request (chart needs daily OHLCV from Node 4).
     """
     date_missing = state.get("date_missing", False)
     intent = state.get("intent", "unknown")
@@ -80,6 +86,10 @@ def route_after_date_parser(state: AgentState) -> str:
     if date_missing or intent == "unknown":
         logger.debug("route_after_date_parser → synthesize (date_missing=%s, intent=%s)", date_missing, intent)
         return "synthesize"
+
+    if intent == "options_view":
+        logger.debug("route_after_date_parser → analyze_options (intent=options_view)")
+        return "analyze_options"
 
     logger.debug("route_after_date_parser → fetch_price (intent=%s)", intent)
     return "fetch_price"
@@ -153,6 +163,7 @@ def create_workflow():
     graph.add_node("fetch_price",        fetch_price_data)
     graph.add_node("retrieve_news",      retrieve_news)
     graph.add_node("reddit_sentiment",   analyze_reddit_sentiment)
+    graph.add_node("analyze_options",    analyze_options)
     graph.add_node("synthesize",         synthesize_response)
     graph.add_node("generate_chart",     generate_chart)
 
@@ -176,10 +187,14 @@ def create_workflow():
         "parse_dates",
         route_after_date_parser,
         {
-            "fetch_price": "fetch_price",
-            "synthesize":  "synthesize",
+            "fetch_price":     "fetch_price",
+            "analyze_options": "analyze_options",
+            "synthesize":      "synthesize",
         },
     )
+
+    # Node 8: options_view path — analyze options then synthesize
+    graph.add_edge("analyze_options", "synthesize")
 
     # After Node 4: fan-out or direct chart for chart_request
     # Returns [Send("retrieve_news"), Send("reddit_sentiment")] for analysis intents,
@@ -213,7 +228,7 @@ def create_workflow():
     # Compile
     # ------------------------------------------------------------------
     compiled = graph.compile()
-    logger.info("Stock Insight Agent workflow compiled (Phase 2)")
+    logger.info("Stock Insight Agent workflow compiled (Phase 2 + Node 8 Options)")
     return compiled
 
 

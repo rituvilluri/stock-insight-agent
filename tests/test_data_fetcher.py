@@ -341,3 +341,142 @@ def test_node_preserves_existing_state_fields(mock_ticker_class):
     assert result["company_name"] == "NVIDIA"
     assert result["date_context"] == "last week"
     assert result["chart_requested"] is False
+
+
+# ---------------------------------------------------------------------------
+# Node 4 enrichment tests — analyst data, short interest, earnings date
+# ---------------------------------------------------------------------------
+
+@patch("agent.graph.nodes.data_fetcher.yf.Ticker")
+def test_analyst_data_populated_when_info_available(mock_ticker_class):
+    """
+    When ticker.info contains analyst price target fields,
+    analyst_data must be populated in the returned state.
+    """
+    query_df = _make_hist_df(n_days=5)
+    baseline_df = _make_hist_df(n_days=60)
+
+    mock_instance = MagicMock()
+    mock_instance.history.side_effect = [query_df, baseline_df]
+    mock_instance.info = {
+        "targetMeanPrice": 150.0,
+        "targetHighPrice": 200.0,
+        "targetLowPrice": 100.0,
+        "numberOfAnalystOpinions": 35,
+        "shortPercentOfFloat": 0.03,
+        "shortRatio": 1.5,
+        "sharesShort": 100_000_000,
+        "sharesShortPriorMonth": 95_000_000,
+    }
+    mock_instance.recommendations_summary = pd.DataFrame()
+    mock_instance.calendar = {}
+    mock_ticker_class.return_value = mock_instance
+
+    result = fetch_price_data(_make_state())
+
+    assert result.get("analyst_data") is not None
+    assert result["analyst_data"]["mean_target"] == 150.0
+    assert result["analyst_data"]["high_target"] == 200.0
+    assert result["analyst_data"]["num_analysts"] == 35
+
+
+@patch("agent.graph.nodes.data_fetcher.yf.Ticker")
+def test_short_interest_populated_when_info_available(mock_ticker_class):
+    """
+    When ticker.info contains short interest fields,
+    short_interest must be populated in the returned state.
+    """
+    query_df = _make_hist_df(n_days=5)
+    baseline_df = _make_hist_df(n_days=60)
+
+    mock_instance = MagicMock()
+    mock_instance.history.side_effect = [query_df, baseline_df]
+    mock_instance.info = {
+        "shortPercentOfFloat": 0.03,
+        "shortRatio": 1.5,
+        "sharesShort": 100_000_000,
+        "sharesShortPriorMonth": 95_000_000,
+    }
+    mock_instance.recommendations_summary = pd.DataFrame()
+    mock_instance.calendar = {}
+    mock_ticker_class.return_value = mock_instance
+
+    result = fetch_price_data(_make_state())
+
+    assert result.get("short_interest") is not None
+    assert result["short_interest"]["short_percent_of_float"] == 0.03
+    assert result["short_interest"]["short_ratio"] == 1.5
+    assert result["short_interest"]["shares_short"] == 100_000_000
+
+
+@patch("agent.graph.nodes.data_fetcher.yf.Ticker")
+def test_earnings_date_populated_when_calendar_available(mock_ticker_class):
+    """
+    When ticker.calendar has an Earnings Date, next_earnings_date and
+    days_until_earnings must be populated in the returned state.
+    """
+    from datetime import datetime, timedelta
+
+    query_df = _make_hist_df(n_days=5)
+    baseline_df = _make_hist_df(n_days=60)
+
+    future_date = datetime.now() + timedelta(days=30)
+
+    mock_instance = MagicMock()
+    mock_instance.history.side_effect = [query_df, baseline_df]
+    mock_instance.info = {}
+    mock_instance.recommendations_summary = pd.DataFrame()
+    mock_instance.calendar = {"Earnings Date": [future_date]}
+    mock_ticker_class.return_value = mock_instance
+
+    result = fetch_price_data(_make_state())
+
+    assert result.get("next_earnings_date") is not None
+    assert result.get("days_until_earnings") is not None
+    assert 28 <= result["days_until_earnings"] <= 32
+
+
+@patch("agent.graph.nodes.data_fetcher.yf.Ticker")
+def test_enrichments_none_when_info_empty(mock_ticker_class):
+    """
+    When ticker.info is an empty dict, analyst_data and short_interest
+    must be None. price_data must still be populated (enrichments are non-fatal).
+    """
+    query_df = _make_hist_df(n_days=5)
+    baseline_df = _make_hist_df(n_days=60)
+
+    mock_instance = MagicMock()
+    mock_instance.history.side_effect = [query_df, baseline_df]
+    mock_instance.info = {}
+    mock_instance.recommendations_summary = pd.DataFrame()
+    mock_instance.calendar = {}
+    mock_ticker_class.return_value = mock_instance
+
+    result = fetch_price_data(_make_state())
+
+    assert result["price_data"] is not None
+    assert result["price_error"] is None
+    assert result.get("analyst_data") is None
+    assert result.get("next_earnings_date") is None
+    assert result.get("days_until_earnings") is None
+
+
+@patch("agent.graph.nodes.data_fetcher.yf.Ticker")
+def test_enrichment_exception_does_not_block_price_data(mock_ticker_class):
+    """
+    If the enrichment info call raises an exception, price_data must still
+    be returned. Enrichment failures are non-fatal.
+    """
+    query_df = _make_hist_df(n_days=5)
+    baseline_df = _make_hist_df(n_days=60)
+
+    mock_instance = MagicMock()
+    mock_instance.history.side_effect = [query_df, baseline_df]
+    # Accessing .info raises to simulate a broken yfinance response
+    type(mock_instance).info = property(lambda self: (_ for _ in ()).throw(Exception("info unavailable")))
+    mock_ticker_class.return_value = mock_instance
+
+    result = fetch_price_data(_make_state())
+
+    assert result["price_data"] is not None
+    assert result["price_error"] is None

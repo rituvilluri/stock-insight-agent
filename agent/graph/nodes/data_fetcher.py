@@ -18,6 +18,7 @@ No LLM calls in this node — pure data retrieval and arithmetic.
 import logging
 import os
 from datetime import datetime, timedelta
+from typing import Optional
 
 import requests
 import yfinance as yf
@@ -242,6 +243,119 @@ def _fetch_alpha_vantage(
 
 
 # ---------------------------------------------------------------------------
+# Enrichment helpers — analyst data, short interest, earnings date
+# All are non-fatal: failures return None and are logged as warnings.
+# ---------------------------------------------------------------------------
+
+def _fetch_analyst_data(ticker: str) -> Optional[dict]:
+    """
+    Fetch analyst price targets and recommendation breakdown via yfinance.
+    Returns None if info is unavailable or all target values are missing.
+    """
+    try:
+        stock = yf.Ticker(ticker)
+        info = stock.info
+        if not isinstance(info, dict):
+            return None
+
+        mean_target = info.get("targetMeanPrice")
+        high_target = info.get("targetHighPrice")
+        low_target = info.get("targetLowPrice")
+        num_analysts = info.get("numberOfAnalystOpinions")
+
+        if mean_target is None and num_analysts is None:
+            return None
+
+        strong_buy = buy = hold = sell = strong_sell = None
+        try:
+            recs = stock.recommendations_summary
+            if recs is not None and isinstance(recs, object) and hasattr(recs, "empty") and not recs.empty:
+                latest = recs.iloc[0]
+                strong_buy = int(latest.get("strongBuy", 0))
+                buy = int(latest.get("buy", 0))
+                hold = int(latest.get("hold", 0))
+                sell = int(latest.get("sell", 0))
+                strong_sell = int(latest.get("strongSell", 0))
+        except Exception:
+            pass
+
+        return {
+            "mean_target": mean_target,
+            "high_target": high_target,
+            "low_target": low_target,
+            "num_analysts": num_analysts,
+            "strong_buy": strong_buy,
+            "buy": buy,
+            "hold": hold,
+            "sell": sell,
+            "strong_sell": strong_sell,
+        }
+
+    except Exception as e:
+        logger.warning("analyst_data fetch failed for %s: %s", ticker, e)
+        return None
+
+
+def _fetch_short_interest(ticker: str) -> Optional[dict]:
+    """
+    Fetch short interest metrics from yfinance ticker.info.
+    Returns None if info is unavailable or all short fields are missing.
+    """
+    try:
+        info = yf.Ticker(ticker).info
+        if not isinstance(info, dict):
+            return None
+
+        short_pct = info.get("shortPercentOfFloat")
+        short_ratio = info.get("shortRatio")
+        shares_short = info.get("sharesShort")
+        shares_short_prior = info.get("sharesShortPriorMonth")
+
+        if all(v is None for v in [short_pct, short_ratio, shares_short, shares_short_prior]):
+            return None
+
+        return {
+            "short_percent_of_float": short_pct,
+            "short_ratio": short_ratio,
+            "shares_short": shares_short,
+            "shares_short_prior_month": shares_short_prior,
+        }
+
+    except Exception as e:
+        logger.warning("short_interest fetch failed for %s: %s", ticker, e)
+        return None
+
+
+def _fetch_earnings_date(ticker: str) -> tuple[Optional[str], Optional[int]]:
+    """
+    Fetch next earnings date from yfinance ticker.calendar.
+    Returns (ISO date string, days until earnings) or (None, None).
+    """
+    try:
+        calendar = yf.Ticker(ticker).calendar
+        if not isinstance(calendar, dict):
+            return None, None
+
+        earnings_list = calendar.get("Earnings Date")
+        if not earnings_list:
+            return None, None
+
+        earnings_dt = earnings_list[0]
+        # Handle both datetime and date objects
+        if hasattr(earnings_dt, "date"):
+            earnings_date = earnings_dt.date()
+        else:
+            earnings_date = earnings_dt
+
+        days = (earnings_date - datetime.now().date()).days
+        return earnings_date.strftime("%Y-%m-%d"), days
+
+    except Exception as e:
+        logger.warning("earnings_date fetch failed for %s: %s", ticker, e)
+        return None, None
+
+
+# ---------------------------------------------------------------------------
 # Node function
 # ---------------------------------------------------------------------------
 
@@ -258,7 +372,12 @@ def fetch_price_data(state: AgentState) -> AgentState:
     if not ticker or not start_date or not end_date:
         msg = f"Missing required state fields: ticker={ticker!r} start={start_date!r} end={end_date!r}"
         logger.error(msg)
-        return {**state, "price_data": None, "volume_anomaly": None, "price_error": msg}
+        return {
+            **state,
+            "price_data": None, "volume_anomaly": None, "price_error": msg,
+            "analyst_data": None, "short_interest": None,
+            "next_earnings_date": None, "days_until_earnings": None,
+        }
 
     # Layer 1 — yfinance (primary)
     price_data, result = _fetch_yfinance(ticker, start_date, end_date)
@@ -269,11 +388,18 @@ def fetch_price_data(state: AgentState) -> AgentState:
             "fetch_price_data [yfinance] → %s %.2f%% (%d trading days)",
             ticker, price_data["percent_change"], len(price_data["daily_prices"]),
         )
+        analyst_data = _fetch_analyst_data(ticker)
+        short_interest = _fetch_short_interest(ticker)
+        next_earnings_date, days_until_earnings = _fetch_earnings_date(ticker)
         return {
             **state,
             "price_data": price_data,
             "volume_anomaly": volume_anomaly,
             "price_error": None,
+            "analyst_data": analyst_data,
+            "short_interest": short_interest,
+            "next_earnings_date": next_earnings_date,
+            "days_until_earnings": days_until_earnings,
         }
 
     yfinance_error = result  # second return value is error string on failure
@@ -285,20 +411,27 @@ def fetch_price_data(state: AgentState) -> AgentState:
         logger.warning("fetch_price_data: no ALPHA_VANTAGE_API_KEY set; no fallback available")
         return {
             **state,
-            "price_data": None,
-            "volume_anomaly": None,
-            "price_error": yfinance_error,
+            "price_data": None, "volume_anomaly": None, "price_error": yfinance_error,
+            "analyst_data": None, "short_interest": None,
+            "next_earnings_date": None, "days_until_earnings": None,
         }
 
     price_data, av_result = _fetch_alpha_vantage(ticker, start_date, end_date, alpha_key)
 
     if price_data is not None:
         logger.info("fetch_price_data [alpha_vantage] → %s", ticker)
+        analyst_data = _fetch_analyst_data(ticker)
+        short_interest = _fetch_short_interest(ticker)
+        next_earnings_date, days_until_earnings = _fetch_earnings_date(ticker)
         return {
             **state,
             "price_data": price_data,
             "volume_anomaly": None,   # not computed for AV fallback (rate limit concern)
             "price_error": None,
+            "analyst_data": analyst_data,
+            "short_interest": short_interest,
+            "next_earnings_date": next_earnings_date,
+            "days_until_earnings": days_until_earnings,
         }
 
     # Both sources failed
@@ -306,7 +439,7 @@ def fetch_price_data(state: AgentState) -> AgentState:
     logger.error("fetch_price_data: all sources failed for %s: %s", ticker, combined_error)
     return {
         **state,
-        "price_data": None,
-        "volume_anomaly": None,
-        "price_error": combined_error,
+        "price_data": None, "volume_anomaly": None, "price_error": combined_error,
+        "analyst_data": None, "short_interest": None,
+        "next_earnings_date": None, "days_until_earnings": None,
     }

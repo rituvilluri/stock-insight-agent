@@ -84,10 +84,10 @@ def test_route_date_parser_chart_request_to_fetch_price():
     assert route_after_date_parser(state) == "fetch_price"
 
 
-def test_route_date_parser_options_view_to_fetch_price():
-    """options_view routes to fetch_price in Phase 1 (no options node yet)."""
+def test_route_date_parser_options_view_to_analyze_options():
+    """options_view routes directly to analyze_options (Node 8 is now wired)."""
     state = _state(intent="options_view", date_missing=False)
-    assert route_after_date_parser(state) == "fetch_price"
+    assert route_after_date_parser(state) == "analyze_options"
 
 
 # ---------------------------------------------------------------------------

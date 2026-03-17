@@ -152,6 +152,31 @@ class AgentState(TypedDict, total=False):
     # Written by Node 4 if both yfinance and Alpha Vantage fail. None on
     # success. Node 9 checks this to note unavailability in the response.
 
+    analyst_data: Optional[dict]
+    # Dictionary containing:
+    #   mean_target, high_target, low_target, num_analysts,
+    #   strong_buy, buy, hold, sell, strong_sell
+    # None if retrieval failed or all price target values unavailable.
+    # Written by Node 4 alongside price_data. Read by Node 9.
+
+    short_interest: Optional[dict]
+    # Dictionary containing:
+    #   short_percent_of_float, short_ratio,
+    #   shares_short, shares_short_prior_month
+    # None if retrieval failed or unavailable.
+    # Written by Node 4 alongside price_data. Read by Node 9.
+
+    next_earnings_date: Optional[str]
+    # ISO date string of the next scheduled earnings date, e.g. "2024-07-24".
+    # None if unavailable.
+    # Written by Node 4. Read by Nodes 8 (Options Analyzer) and 9.
+
+    days_until_earnings: Optional[int]
+    # Integer days from today until next_earnings_date.
+    # Negative if the earnings date has already passed.
+    # None if next_earnings_date is None.
+    # Written by Node 4. Read by Nodes 8 and 9.
+
     # -------------------------------------------------------------------------
     # Node 5: News Retriever
     # Reads: ticker, company_name, start_date, end_date, user_config,
