@@ -19,11 +19,13 @@ llm_classifier = ChatGroq(
 # temperature=0.3 → slight variation for natural-sounding prose.
 # max_tokens=1024 → narrative responses need more room than JSON classifiers.
 # 70b model for better multi-source reasoning quality (Decision 12).
+# streaming=True → enables token-by-token delivery via astream_events.
 llm_synthesizer = ChatGroq(
     model="llama-3.3-70b-versatile",
     temperature=0.3,
     max_tokens=1024,
     groq_api_key=_groq_key,
+    streaming=True,
 )
 
 # Legacy alias kept so the existing tool_caller.py and app.py don't break
