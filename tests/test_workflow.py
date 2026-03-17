@@ -100,11 +100,11 @@ def test_route_fetch_price_chart_request_to_generate_chart():
 
 
 def _assert_parallel_fan_out(result):
-    """Helper: result must be [Send(retrieve_news), Send(reddit_sentiment)]."""
+    """Helper: result must be [Send(retrieve_news), Send(reddit_sentiment), Send(retrieve_rag)]."""
     assert isinstance(result, list), "Expected list of Send objects"
-    assert len(result) == 2
+    assert len(result) == 3
     nodes = {s.node for s in result}
-    assert nodes == {"retrieve_news", "reddit_sentiment"}
+    assert nodes == {"retrieve_news", "reddit_sentiment", "retrieve_rag"}
 
 
 def test_route_fetch_price_stock_analysis_fans_out():
