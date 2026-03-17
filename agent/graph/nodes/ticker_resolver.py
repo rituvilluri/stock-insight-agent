@@ -223,7 +223,23 @@ def resolve_ticker(state: AgentState) -> AgentState:
             logger.info("resolve_ticker [lookup] → ticker=%r company=%r", ticker, company_name)
             return {**state, "ticker": ticker, "company_name": company_name, "ticker_error": None}
 
-        # Layer 3 — LLM fallback for unknown companies
+        # Before falling back to the LLM, check if session context already has
+        # a valid ticker. If layers 1 and 2 both missed, the message likely
+        # contains no explicit stock mention (e.g. "does it have anything to do
+        # with the war?" or "what about earnings?"). In that case, preserve the
+        # session ticker rather than asking the LLM — which would hallucinate a
+        # stock from whatever word sounds most "stock-like" in the message.
+        seeded_ticker = state.get("ticker", "")
+        if seeded_ticker:
+            logger.info(
+                "resolve_ticker: no ticker in message, preserving session ticker %r",
+                seeded_ticker,
+            )
+            return {**state, "ticker_error": None}
+
+        # Layer 3 — LLM fallback: only reached when there is no session context
+        # AND the user typed something the lookup table doesn't recognise.
+        # Example: "how did Scorpio Tankers do?" on a fresh session.
         logger.info("resolve_ticker: no match in direct/lookup, falling back to LLM")
         result = _llm_resolve(user_message)
         if result:
@@ -231,7 +247,6 @@ def resolve_ticker(state: AgentState) -> AgentState:
             logger.info("resolve_ticker [llm] → ticker=%r company=%r", ticker, company_name)
             return {**state, "ticker": ticker, "company_name": company_name, "ticker_error": None}
 
-        # All three layers failed — no stock found in the message
         logger.warning("resolve_ticker: could not identify a ticker in message")
         return {
             **state,

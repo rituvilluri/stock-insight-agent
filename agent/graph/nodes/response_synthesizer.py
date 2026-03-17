@@ -40,6 +40,23 @@ from typing import Optional
 from agent.graph.nodes.state import AgentState
 from llm.llm_setup import llm_synthesizer
 
+
+def _fmt_volume(vol) -> str:
+    """Format a raw share volume number into a human-readable string."""
+    if vol is None:
+        return "N/A"
+    try:
+        vol = float(vol)
+    except (TypeError, ValueError):
+        return str(vol)
+    if vol >= 1_000_000_000:
+        return f"{vol / 1_000_000_000:.2f}B"
+    if vol >= 1_000_000:
+        return f"{vol / 1_000_000:.2f}M"
+    if vol >= 1_000:
+        return f"{vol / 1_000:.1f}K"
+    return f"{vol:,.0f}"
+
 logger = logging.getLogger(__name__)
 
 
@@ -112,7 +129,7 @@ def _build_synthesis_prompt(state: AgentState) -> str:
             f"High: ${dp.get('high_price')}\n"
             f"Low: ${dp.get('low_price')}\n"
             f"Price change: ${dp.get('price_change')} ({dp.get('percent_change')}%)\n"
-            f"Total volume: {dp.get('total_volume'):,}"
+            f"Total volume: {_fmt_volume(dp.get('total_volume'))}"
         )
     elif price_error:
         sections.append(
@@ -130,8 +147,8 @@ def _build_synthesis_prompt(state: AgentState) -> str:
         sections.append(
             f"## Volume Anomaly\n"
             f"Unusual trading volume detected: {ratio_str} above the 90-day average.\n"
-            f"Period average daily volume: {volume_anomaly.get('average_daily_volume'):,.0f}\n"
-            f"Historical average (90-day): {volume_anomaly.get('historical_average_volume'):,.0f}"
+            f"Period average daily volume: {_fmt_volume(volume_anomaly.get('average_daily_volume'))}\n"
+            f"Historical average (90-day): {_fmt_volume(volume_anomaly.get('historical_average_volume'))}"
         )
 
     # ------------------------------------------------------------------

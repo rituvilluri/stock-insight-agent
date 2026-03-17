@@ -27,6 +27,7 @@ from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
 import feedparser
+import yfinance as yf
 from newsapi import NewsApiClient
 
 from agent.graph.nodes.state import AgentState
@@ -46,6 +47,35 @@ def _get_newsapi_key(user_config: dict) -> str | None:
     return user_config.get("newsapi_key") or os.getenv("NEWSAPI_KEY")
 
 
+def _get_sector_keywords(ticker: str) -> list[str]:
+    """
+    Fetch sector/industry from yfinance and return relevant macro search terms.
+    Returns an empty list on failure or when no useful terms are known.
+    Cached implicitly by yfinance's requests session within a single process.
+    """
+    try:
+        info = yf.Ticker(ticker).info
+        industry = (info.get("industry") or "").lower()
+        sector = (info.get("sector") or "").lower()
+
+        keywords = []
+        if any(w in industry for w in ["shipping", "tanker", "marine"]):
+            keywords = ["tanker rates", "shipping sanctions", "Red Sea shipping"]
+        elif any(w in industry for w in ["oil", "gas", "energy"]):
+            keywords = ["oil prices", "energy sector"]
+        elif any(w in industry for w in ["semiconductor", "chip"]):
+            keywords = ["semiconductor supply", "chip demand"]
+        elif any(w in sector for w in ["technology"]):
+            keywords = ["tech sector"]
+        elif any(w in sector for w in ["financial"]):
+            keywords = ["interest rates", "banking sector"]
+
+        return keywords
+    except Exception as e:
+        logger.debug("sector keyword lookup failed for %s: %s", ticker, e)
+        return []
+
+
 def _build_query(ticker: str, company_name: str) -> str:
     """Build a search query that matches ticker OR company name."""
     parts = []
@@ -54,6 +84,7 @@ def _build_query(ticker: str, company_name: str) -> str:
     if company_name and company_name.lower() != ticker.lower():
         parts.append(f'"{company_name}"')
     return " OR ".join(parts) if parts else ticker
+
 
 
 def _parse_newsapi_articles(articles: list) -> list:
@@ -117,15 +148,19 @@ def _fetch_google_rss(
     company_name: str,
     start_date: str,
     end_date: str,
+    extra_terms: list[str] | None = None,
 ) -> list | None:
     """
     Query Google News RSS.
     Date filtering is best-effort: Google RSS doesn't support exact range
     filtering so we filter parsed entries by published date.
+    extra_terms: optional sector/macro keywords appended to broaden context.
     Returns a normalised article list on success, None on failure or empty.
     """
     try:
         query = _build_query(ticker, company_name)
+        if extra_terms:
+            query = f"{query} OR {extra_terms[0]}"
         url = _GOOGLE_NEWS_RSS.format(query=quote_plus(query))
         feed = feedparser.parse(url)
 
@@ -205,9 +240,10 @@ def retrieve_news(state: AgentState) -> AgentState:
                 source_used = "newsapi"
                 logger.info("retrieve_news [newsapi] → %d articles", len(articles))
 
-        # Layer 2 — Google News RSS fallback
+        # Layer 2 — Google News RSS fallback (enriched with sector context)
         if articles is None:
-            articles = _fetch_google_rss(ticker, company_name, start_date, end_date)
+            sector_terms = _get_sector_keywords(ticker)
+            articles = _fetch_google_rss(ticker, company_name, start_date, end_date, extra_terms=sector_terms)
             if articles is not None:
                 source_used = "google_rss"
                 logger.info("retrieve_news [google_rss] → %d articles", len(articles))

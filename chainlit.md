@@ -1,39 +1,25 @@
-# 🚀 Stock Insight Agent
+# Stock Insight Agent
 
-Welcome to your AI-powered stock market analysis assistant! 
+Ask me about any stock in plain English. I'll pull price data, recent news, and Reddit sentiment to give you a grounded analysis.
 
-## 📊 What I Can Do
+## What you can ask
 
-I help you analyze stocks by providing:
+- *How did NVIDIA do last month?*
+- *What happened to Tesla around Q2 2024 earnings?*
+- *Show me a chart of Apple over the last 3 weeks*
+- *How did STNG do in the last 2 weeks?*
+- *What does the options chain look like for AMD right now?*
 
-- **📈 Historical Stock Data** - Get detailed performance metrics
-- **📅 Smart Date Parsing** - Understand natural language like "last 3 weeks"
-- **📊 Interactive Charts** - Visualize stock performance
-- **🎯 Company Recognition** - Automatically identify stock tickers
+## What I'll give you
 
-## 💡 Example Questions
+- **Price action** — open, close, high, low, % change over your period
+- **Contributing factors** — relevant news articles with sources
+- **Reddit sentiment** — bullish/bearish breakdown from r/wallstreetbets, r/stocks, r/options
+- **Interactive chart** — just ask and I'll generate one
+- **Volume context** — whether trading activity was unusual
 
-Try asking me:
+## Tips
 
-- "How did NVIDIA perform over the last 3 weeks?"
-- "What's Apple's stock performance for the past month?"
-- "Show me Tesla's stock data from last week"
-- "Generate a chart for Microsoft stock"
-
-## 🛠️ How It Works
-
-1. **Ask** me about any stock or company
-2. **I'll parse** your request and extract key information
-3. **Fetch** real-time data from multiple sources
-4. **Present** you with detailed analysis and insights
-
-## 🔧 Technical Features
-
-- **LangGraph Workflow** - Advanced AI reasoning
-- **Dual Data Sources** - yfinance + Alpha Vantage for reliability
-- **Real-time Analysis** - Live market data
-- **Interactive UI** - Modern chat interface
-
----
-
-*Ready to start analyzing stocks? Just type your question below!* 📈
+- You don't need to use ticker symbols — company names work fine
+- Follow-up questions work: *"show me a chart of that"* or *"what about last quarter?"*
+- I'll tell you when data is unavailable rather than guessing
