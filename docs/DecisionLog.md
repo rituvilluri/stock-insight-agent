@@ -301,3 +301,27 @@ The search strategy uses semantic search with metadata pre-filtering (by ticker 
 **Choice and Rationale:** Options first. The product is more compelling to demonstrate with all four real-time data dimensions (price, news, sentiment, options) before adding the filing retrieval dimension. RAG doesn't make the existing features better; it adds a fifth dimension. Options makes the existing `stock_analysis` path complete. From an interview portfolio perspective, a working options analyzer is also a stronger demonstration of financial domain depth than a RAG pipeline over SEC filings.
 
 **Tradeoffs Accepted:** The RAG pipeline remains deferred. Queries about earnings management commentary will not be answered until Phase 3 is built. The PRD phase numbering is preserved; only the build order changes.
+
+---
+
+## Decision 15: Trader-Grade Data Enrichment Strategy
+
+**Date:** March 2026 **Status:** Accepted
+
+**Decision:** Extend Node 4 (Price Data Fetcher) with three enrichment signals — analyst ratings and price targets, short interest, and earnings date proximity — and expand the Phase 3 RAG corpus to include 8-K filings and earnings call transcripts alongside 10-K and 10-Q.
+
+**Context:** A review of the existing data strategy from the perspective of a working trader identified a gap between what the agent was retrieving and what traders actually use to make decisions. All three enrichment signals are already available via yfinance with no additional API keys or rate limit concerns. The RAG corpus was limited to 10-K and 10-Q filings, which are backward-looking annual and quarterly reports. 8-K filings capture material events in real time (earnings releases, guidance changes, executive departures). Earnings call transcripts, filed as 8-K exhibits, are what analysts and traders read to assess forward outlook — the tone, specific language, and Q&A cannot be found in the structured filing.
+
+**Options Considered:**
+
+- **Status quo:** Analyst ratings, short interest, and earnings proximity are omitted. RAG corpus limited to 10-K and 10-Q.
+- **Add Tradier API for exchange-calculated Greeks:** Real-time Greeks are more precise but require account registration and the free tier does not cover live tickers. Rejected.
+- **Self-calculate Greeks via Black-Scholes:** Standard industry formula. Given that yfinance provides implied volatility, the only input that affects accuracy is IV precision (15-min delayed). Sufficient for analysis use case. Accepted for Options Analyzer.
+- **Add enrichment signals to a new dedicated node:** More explicit separation of concerns, but adds a sequential node to the graph for work that can be done in a single yfinance pass already happening in Node 4.
+- **Add enrichment signals to Node 4:** Same yfinance Ticker object, same network call. All failures are non-fatal and don't block price data retrieval. Accepted.
+
+**Choice and Rationale:** All three enrichment signals added to Node 4. The analyst consensus price target tells traders where professionals think the stock is headed. Short float and days-to-cover tell traders whether there is meaningful short positioning that could fuel a squeeze. Earnings proximity tells options traders whether elevated IV reflects a real event catalyst. None of these require a new API, none block the critical path, and all three materially improve the quality of the synthesizer's output for `stock_analysis` and `options_view` intents.
+
+8-K and earnings call transcripts added to the RAG corpus because they are the most actionable documents in the SEC EDGAR archive for a trader's time horizon. A 10-K tells you what happened last year; an 8-K tells you what happened this week. Both are free, same pipeline.
+
+**Tradeoffs Accepted:** Node 4 takes on more responsibility than strictly "price data." The enrichment calls are best-effort and non-fatal — if any yfinance call fails, the node writes None to that field and continues. The synthesizer handles None gracefully. Black-Scholes Greeks are slightly less precise than exchange-calculated Greeks due to 15-minute IV delay, but the difference is immaterial for the retrospective analysis use case this agent is designed for.

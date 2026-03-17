@@ -191,6 +191,29 @@ StockInsightState:
       Error message if price retrieval failed. None if successful.
       Read by: Node 9
 
+  analyst_data: dict or None
+      Analyst consensus from yfinance. Contains: mean_target, high_target,
+      low_target, num_analysts, strong_buy, buy, hold, sell, strong_sell.
+      None if unavailable or retrieval failed.
+      Read by: Node 9
+
+  short_interest: dict or None
+      Short selling data from yfinance. Contains: short_percent_of_float,
+      short_ratio (days to cover), shares_short, shares_short_prior_month.
+      None if unavailable.
+      Read by: Node 9
+
+  next_earnings_date: str or None
+      ISO date of the next scheduled earnings release. Example: "2026-05-28"
+      None if unavailable.
+      Read by: Nodes 8, 9
+
+  days_until_earnings: int or None
+      Number of calendar days from today until next_earnings_date.
+      Negative values indicate the date has passed.
+      None if next_earnings_date is None.
+      Read by: Nodes 8, 9
+
   # --- Set by Node 5: News Retriever ---
   news_articles: list[dict]
       Each article contains: title, source_name, published_date,
@@ -223,7 +246,7 @@ StockInsightState:
 
   # --- Set by Node 7: RAG Retriever ---
   filing_chunks: list[dict]
-      Each chunk contains: text, filing_type (10-Q, 10-K),
+      Each chunk contains: text, filing_type (10-Q, 10-K, 8-K, transcript),
       filing_quarter, filing_date, chunk_relevance_score
       Read by: Node 9
 
@@ -326,7 +349,7 @@ If no date range or event can be determined from the message, the node sets `da
 
 ### Node 4: Price Data Fetcher
 
-**Reads:** `ticker`, `start_date`, `end_date` **Writes:** `price_data`, `volume_anomaly`, `price_error` **LLM call:** No **External API call:** Yes (yfinance, Alpha Vantage as fallback)
+**Reads:** `ticker`, `start_date`, `end_date` **Writes:** `price_data`, `volume_anomaly`, `analyst_data`, `short_interest`, `next_earnings_date`, `days_until_earnings`, `price_error` **LLM call:** No **External API call:** Yes (yfinance, Alpha Vantage as fallback)
 
 Calls yfinance to get daily OHLCV data for the ticker and date range. If yfinance fails, falls back to Alpha Vantage.
 
@@ -335,6 +358,14 @@ Calculates: opening price (first day's open), closing price (last day's close), 
 Calculates volume anomaly by comparing the average daily volume during the queried period against the stock's 90-day historical average volume. If the period's average exceeds the historical average by more than 1.5x, `is_anomalous` is set to true. This threshold is configurable and serves as a proxy signal for unusual trading activity.
 
 The daily_prices list is preserved in state for the Chart Generator.
+
+Also fetches three enrichment signals from yfinance in the same node pass:
+
+**Analyst data:** `ticker.analyst_price_targets` and `ticker.recommendations_summary` return analyst consensus price targets and buy/hold/sell breakdowns. Written to `analyst_data`. Failures are non-fatal — sets to None and continues.
+
+**Short interest:** `ticker.info` fields `shortPercentOfFloat`, `shortRatio`, `sharesShort`, and `sharesShortPriorMonth`. Written to `short_interest`. Non-fatal on failure.
+
+**Earnings date:** `ticker.calendar` returns the next scheduled earnings date. Calculates `days_until_earnings` from today. Written to `next_earnings_date` and `days_until_earnings`. Non-fatal on failure.
 
 ### Node 5: News Retriever
 
@@ -358,23 +389,29 @@ Aggregates results into `sentiment_summary` with counts, percentages, and subr
 
 ### Node 7: RAG Retriever
 
-**Reads:** `ticker`, `start_date`, `end_date`, `user_message` **Writes:** `filing_chunks`, `filing_ingested`, `filing_error` **LLM call:** No **External API call:**Yes (ChromaDB local, potentially SEC EDGAR and Google Gemini)
+**Reads:** `ticker`, `start_date`, `end_date`, `user_message` **Writes:** `filing_chunks`, `filing_ingested`, `filing_error` **LLM call:** No **External API call:** Yes (ChromaDB local, potentially SEC EDGAR and Google Gemini)
 
 Queries ChromaDB for existing chunks matching the ticker and date range using metadata filtering combined with semantic search.
 
-If ChromaDB returns relevant results, writes them to `filing_chunks` with `filing_ingested` set to false.
+If ChromaDB returns relevant results, writes them to `filing_chunks` with `filing_ingested` set to false.
 
-If no results exist and the date range overlaps with an earnings period, triggers on-demand ingestion: downloads the filing from SEC EDGAR, chunks the document, embeds via Google Gemini API, stores in ChromaDB with metadata and document-level IDs for deduplication, then queries the freshly stored chunks.
+If no results exist and the date range overlaps with an earnings period, triggers on-demand ingestion. The corpus covers four SEC EDGAR document types: 10-K (annual report), 10-Q (quarterly report), 8-K (material event filing — earnings releases, guidance updates, executive changes), and earnings call transcripts (filed as 8-K exhibits). Downloads the document from SEC EDGAR, chunks, embeds via Google Gemini API, stores in ChromaDB with metadata and document-level IDs for deduplication, then queries freshly stored chunks.
 
 Full ingestion workflow documented in Section 6: RAG Pipeline Design.
 
 ### Node 8: Options Analyzer
 
-**Reads:** `ticker`, `intent`, `include_current_snapshot` **Writes:** `options_data`, `options_error` **LLM call:** No **External API call:** Yes (yfinance)
+**Reads:** `ticker`, `intent`, `include_current_snapshot`, `next_earnings_date`, `days_until_earnings` **Writes:** `options_data`, `options_error` **LLM call:** No **External API call:** Yes (yfinance)
 
-Executes when `intent` is `options_view` or when `include_current_snapshot` is true (to provide current market positioning alongside historical analysis).
+Executes when `intent` is `options_view` or when `include_current_snapshot` is true (to provide current market positioning alongside historical analysis).
 
 Calls yfinance for the options chain at the nearest expiration date. Calculates put/call ratio by volume, identifies strikes with highest volume and open interest, and calculates average implied volatility.
+
+Calculates Greeks (Delta, Gamma, Theta, Vega) using Black-Scholes with yfinance-supplied implied volatility, current underlying price, risk-free rate (approximated from 3-month T-bill), and time to expiry.
+
+Calculates Max Pain: the strike price where total dollar loss for option buyers is maximized at expiry, derived from open interest across all strikes.
+
+Incorporates `days_until_earnings` to flag elevated pre-earnings IV context or expected post-earnings IV crush.
 
 For historical queries without the current snapshot flag, this node does not execute. The volume anomaly data from Node 4 serves as the historical proxy.
 
@@ -509,6 +546,8 @@ Collections are organized by embedding model. All embeddings use Google Gemini's
 Documents stored with unique IDs based on source (format: `{ticker}-{filing_type}-{period}-chunk-{number}`). Duplicate ID inserts are no-ops, providing automatic deduplication.
 
 Failure modes: Minimal in embedded mode. Disk space exhaustion is the primary risk, unlikely given data volumes.
+
+**Phase 5 migration:** At deployment, ChromaDB transitions from local embedded mode to ChromaDB Cloud free tier (1GB hosted storage). The API is identical — one configuration change. This eliminates local disk dependency on the deployed container and survives container restarts without a mounted persistent volume.
 
 ---
 

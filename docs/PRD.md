@@ -191,13 +191,18 @@ These features transform the product from a stock data lookup tool into the mult
 
 This phase adds depth through earnings report analysis, building a growing knowledge base that makes the agent more capable over time.
 
-- SEC EDGAR integration to retrieve earnings filings (10-Q, 10-K) for public companies
+- SEC EDGAR integration to retrieve and embed the following document types for any public company:
+  - **10-K** (annual report): full-year financial results, MD&A, risk factors
+  - **10-Q** (quarterly report): quarterly financials and management commentary
+  - **8-K** (material event filing): earnings releases, executive changes, mergers, guidance updates — the real-time signal layer
+  - **Earnings call transcripts** (filed as 8-K exhibits): management tone, forward guidance, analyst Q&A — what traders actually read
 - Document chunking and embedding pipeline using Google Gemini embedding API
 - ChromaDB vector store with metadata tagging (ticker, filing type, quarter, date)
 - Deduplication via document-level IDs to prevent redundant storage
 - RAG retrieval node in the graph that searches relevant filing chunks based on user query
 - On-demand ingestion: first query for a filing triggers download, chunking, and embedding, with subsequent queries served from the vector store
 - Integration of filing context into the multi-source narrative so the agent can reference what management specifically said about results
+- At Phase 5 deployment, ChromaDB migrates from local embedded mode to ChromaDB Cloud free tier (1GB hosted storage) — same API, one config change, eliminates local disk dependency on the deployed container
 
 *Dependency: Requires Phase 2. The RAG node plugs into the existing multi-source synthesis flow as an additional data dimension. Build order: Phase 4 (Options) is being built before Phase 3 — see Decision 14 in the Decision Log.*
 
@@ -209,8 +214,13 @@ This phase adds the options market dimension to complete the full picture descri
 - Put/call ratio calculation and interpretation
 - Identification of unusual options volume or open interest concentrations
 - Implied volatility analysis, particularly around earnings dates
+- Greeks calculation (Delta, Gamma, Theta, Vega) using Black-Scholes with yfinance-supplied implied volatility — enables traders to assess directional exposure, time decay cost, and IV sensitivity
+- Max Pain calculation from open interest across all strikes — the strike where the most contracts expire worthless, a level market makers are incentivized to pin toward at expiry
 - For historical queries, volume-based proxy analysis using stock trading volume as an indicator of elevated options activity
-- Integration of options context into the multi-source narrative
+- Analyst ratings and price targets from yfinance (mean target, high/low range, number of analysts, recent recommendation breakdown) — high-signal context for directional bias
+- Short interest data from yfinance (short float percentage, days to cover, month-over-month change) — critical for identifying squeeze potential or sustained bearish positioning
+- Earnings date awareness: next earnings date and days remaining, surfaced prominently in options responses to contextualize elevated IV before earnings and expected IV crush after
+- Integration of all options and enrichment context into the multi-source narrative
 
 *Dependency: Independent of Phase 3. Being built before Phase 3 (see Decision 14). Options data retrieval feeds into the same synthesis node as the RAG pipeline but requires no RAG infrastructure.*
 
