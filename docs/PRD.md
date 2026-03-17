@@ -171,7 +171,7 @@ These are the features that must exist for the product to deliver any value. The
 - Structured state management across all nodes
 - Basic error handling and graceful failure messaging
 
-*Status: Partially built. Price retrieval, date parsing, chart generation, and Chainlit UI exist but the LangGraph workflow needs to be rebuilt with proper multi-node architecture.*
+*Status: Complete. All Phase 2 nodes built and wired into workflow.*
 
 ### Phase 2: Multi-Source Intelligence
 
@@ -199,7 +199,7 @@ This phase adds depth through earnings report analysis, building a growing knowl
 - On-demand ingestion: first query for a filing triggers download, chunking, and embedding, with subsequent queries served from the vector store
 - Integration of filing context into the multi-source narrative so the agent can reference what management specifically said about results
 
-*Dependency: Requires Phase 2. The RAG node plugs into the existing multi-source synthesis flow as an additional data dimension.*
+*Dependency: Requires Phase 2. The RAG node plugs into the existing multi-source synthesis flow as an additional data dimension. Build order: Phase 4 (Options) is being built before Phase 3 — see Decision 14 in the Decision Log.*
 
 ### Phase 4: Options Analysis
 
@@ -212,7 +212,7 @@ This phase adds the options market dimension to complete the full picture descri
 - For historical queries, volume-based proxy analysis using stock trading volume as an indicator of elevated options activity
 - Integration of options context into the multi-source narrative
 
-*Dependency: Can be built in parallel with Phase 3. Options data retrieval is independent of the RAG pipeline, but both feed into the same synthesis node.*
+*Dependency: Independent of Phase 3. Being built before Phase 3 (see Decision 14). Options data retrieval feeds into the same synthesis node as the RAG pipeline but requires no RAG infrastructure.*
 
 ### Phase 5: User Configuration and Infrastructure
 

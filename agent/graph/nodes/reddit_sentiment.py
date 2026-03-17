@@ -198,7 +198,6 @@ def analyze_reddit_sentiment(state: AgentState) -> AgentState:
         reddit = _build_reddit_client()
         if reddit is None:
             return {
-                **state,
                 "sentiment_summary": None,
                 "sentiment_posts": None,
                 "sentiment_error": "Reddit credentials not configured",
@@ -209,7 +208,6 @@ def analyze_reddit_sentiment(state: AgentState) -> AgentState:
         if not posts:
             logger.info("analyze_reddit_sentiment: no posts found for %s", ticker)
             return {
-                **state,
                 "sentiment_summary": {
                     "total_posts_analyzed": 0,
                     "bullish_count": 0,
@@ -259,7 +257,6 @@ def analyze_reddit_sentiment(state: AgentState) -> AgentState:
         )
 
         return {
-            **state,
             "sentiment_summary": summary,
             "sentiment_posts": sentiment_posts,
             "sentiment_error": None,
@@ -268,7 +265,6 @@ def analyze_reddit_sentiment(state: AgentState) -> AgentState:
     except Exception as e:
         logger.error("analyze_reddit_sentiment failed: %s", e)
         return {
-            **state,
             "sentiment_summary": None,
             "sentiment_posts": None,
             "sentiment_error": str(e),

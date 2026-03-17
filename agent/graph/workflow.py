@@ -1,16 +1,17 @@
 """
-LangGraph workflow for the Stock Insight Agent — Phase 2.
+LangGraph workflow for the Stock Insight Agent — Phase 2 (parallel retrieval).
 
-Nodes wired (Phase 2):
+Nodes wired:
   1  Intent Classifier    — classify_intent
   2  Ticker Resolver      — resolve_ticker
   3  Date Parser          — parse_dates
   4  Price Data Fetcher   — fetch_price_data
-  5  News Retriever       — retrieve_news
+  5  News Retriever       — retrieve_news      ─┐ parallel via Send()
+  6  Reddit Sentiment     — reddit_sentiment   ─┘
   9  Response Synthesizer — synthesize_response
   10 Chart Generator      — generate_chart
 
-Nodes deferred to Phase 3 (stubs, paths route around them):
+Nodes deferred (stubs, paths route around them):
   7  RAG Retriever
   8  Options Analyzer
 
@@ -21,7 +22,8 @@ Routing overview:
 
   route_after_fetch_price
     intent="chart_request"            → generate_chart → END
-    all other intents                 → retrieve_news → synthesize
+    all other intents                 → Send(retrieve_news) + Send(reddit_sentiment)
+                                        [parallel fan-out; both converge at synthesize]
 
   route_after_synthesizer
     chart_requested=True              → generate_chart → END
@@ -37,6 +39,7 @@ Why keep chart_request separate from chart_requested?
 import logging
 
 from langgraph.graph import StateGraph, END
+from langgraph.types import Send
 
 from agent.graph.nodes.state import AgentState
 from agent.graph.nodes.intent_classifier import classify_intent
@@ -82,14 +85,17 @@ def route_after_date_parser(state: AgentState) -> str:
     return "fetch_price"
 
 
-def route_after_fetch_price(state: AgentState) -> str:
+def route_after_fetch_price(state: AgentState):
     """
-    Decide which node runs after Node 4 (Price Data Fetcher).
+    Decide which nodes run after Node 4 (Price Data Fetcher).
 
     chart_request intent: user wants a chart only — skip news retrieval
     and the synthesizer, go straight to chart generation.
 
-    All other intents: proceed to news retrieval (Node 5) before synthesis.
+    All other intents: fan-out via Send() to run Node 5 (News Retriever)
+    and Node 6 (Reddit Sentiment) in parallel.  Both are independent of
+    each other — they only read ticker and date from state.  After both
+    complete their results merge into shared state, then synthesize runs.
     """
     intent = state.get("intent", "stock_analysis")
 
@@ -97,8 +103,11 @@ def route_after_fetch_price(state: AgentState) -> str:
         logger.debug("route_after_fetch_price → generate_chart (chart_request intent)")
         return "generate_chart"
 
-    logger.debug("route_after_fetch_price → retrieve_news (intent=%s)", intent)
-    return "retrieve_news"
+    logger.debug("route_after_fetch_price → Send(retrieve_news) + Send(reddit_sentiment) (intent=%s)", intent)
+    return [
+        Send("retrieve_news", state),
+        Send("reddit_sentiment", state),
+    ]
 
 
 def route_after_synthesizer(state: AgentState) -> str:
@@ -127,7 +136,7 @@ def route_after_synthesizer(state: AgentState) -> str:
 
 def create_workflow():
     """
-    Build and compile the Phase 1 LangGraph workflow.
+    Build and compile the LangGraph workflow with parallel retrieval.
 
     Returns the compiled graph object.  Chainlit calls this once at
     startup and stores the result; the same compiled graph handles all
@@ -172,20 +181,19 @@ def create_workflow():
         },
     )
 
-    # After Node 4: branch on intent (chart_request skips news + synthesizer)
+    # After Node 4: fan-out or direct chart for chart_request
+    # Returns [Send("retrieve_news"), Send("reddit_sentiment")] for analysis intents,
+    # or "generate_chart" string for chart_request intent.
     graph.add_conditional_edges(
         "fetch_price",
         route_after_fetch_price,
-        {
-            "retrieve_news":  "retrieve_news",
-            "generate_chart": "generate_chart",
-        },
+        ["retrieve_news", "reddit_sentiment", "generate_chart"],
     )
 
-    # After Node 5: proceed to Reddit sentiment
-    graph.add_edge("retrieve_news",    "reddit_sentiment")
-
-    # After Node 6: always proceed to synthesizer
+    # Nodes 5 and 6 run in parallel (dispatched via Send above).
+    # Both converge at synthesize — LangGraph waits for both superstep
+    # branches to complete before advancing.
+    graph.add_edge("retrieve_news",    "synthesize")
     graph.add_edge("reddit_sentiment", "synthesize")
 
     # After Node 9: optionally generate chart

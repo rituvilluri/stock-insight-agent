@@ -6,7 +6,7 @@
 
 **Status:** 
 
-**Last Updated:** March 3, 2026
+**Last Updated:** March 17, 2026
 
 ---
 
@@ -243,3 +243,61 @@ The search strategy uses semantic search with metadata pre-filtering (by ticker 
 **Choice and Rationale:** LangSmith for native LangGraph integration. Automatic tracing of every node execution simplifies identifying quality issues at the node level. Ragas supplements LangSmith specifically for RAG retrieval quality. Promptfoo would be redundant alongside LangSmith within the LangChain ecosystem.
 
 **Tradeoffs Accepted:** Platform dependency on LangSmith. Custom eval scripts provide a fallback if the free tier changes or the platform becomes unavailable.
+---
+
+## Decision 12: Two-Model LLM Strategy
+
+**Date:** March 2026 **Status:** Accepted
+
+**Decision:** Use two separate LLM configurations: `llm_classifier` (llama-3.1-8b-instant) for structured classification nodes, `llm_synthesizer` (llama-3.3-70b-versatile) for the Response Synthesizer.
+
+**Context:** LangSmith trace analysis revealed that the synthesizer is the quality bottleneck. It receives 500–1,000+ prompt tokens of multi-source financial data and must produce a coherent, sourced narrative. The 8B model produced adequate but noticeably shallow output for complex multi-source queries. Classification tasks (intent, ticker, date) are deterministic and structured — they don't benefit from a larger model.
+
+**Options Considered:**
+
+- **Single model (8B) for all nodes:** Simple configuration. Classification quality is fine, but synthesis quality is the ceiling.
+- **Single model (70B) for all nodes:** Better synthesis quality. Rate limits hit faster; classification calls are wasteful at 70B scale.
+- **Two-model split:** Small fast model for classification, large capable model for synthesis.
+
+**Choice and Rationale:** Two-model split. Classification nodes return structured JSON with constrained output — the 8B model handles this reliably at lower token cost and higher speed. The synthesizer is the only node that requires genuine reasoning across conflicting signals from multiple data sources. Upgrading only the synthesizer gets the quality improvement where it matters without burning rate limits on classification tasks.
+
+**Tradeoffs Accepted:** Two model configs to maintain. Groq free tier rate limits apply to each model separately, so the 70B model has tighter per-minute token limits than the 8B. For synthesis tasks with large news payloads, the 70B token/minute limit can be a constraint.
+
+---
+
+## Decision 13: Parallel Data Retrieval via LangGraph Send()
+
+**Date:** March 2026 **Status:** Accepted
+
+**Decision:** Implement fan-out parallelism for the news_retriever and reddit_sentiment nodes using LangGraph's `Send()` API rather than sequential execution.
+
+**Context:** The TDD identified that nodes 4–7 are independent of each other. LangSmith traces confirmed the real-world execution profile: news retrieval and Reddit sentiment each take 1–3 seconds sequentially, adding 2–6 seconds of latency to every stock_analysis response for no reason. Each node only reads ticker and date from state; neither requires the other's output.
+
+**Options Considered:**
+
+- **Sequential execution (status quo):** Simple graph topology. Total latency = sum of all retrieval times.
+- **asyncio.gather within a single node:** Parallelizes HTTP calls within one node but doesn't leverage LangGraph's native parallelism primitives.
+- **LangGraph Send() fan-out:** Native LangGraph parallel execution. Each Send() dispatches a node as an independent branch; results merge back into state before the synthesizer.
+
+**Choice and Rationale:** LangGraph Send(). Aligns with the documented TDD design intent ("they can execute in parallel") and uses the framework's native mechanism rather than working around it. Total response latency reduces from sequential sum to the slowest individual node.
+
+**Tradeoffs Accepted:** Slightly more complex workflow topology. Fan-out requires a merge step before the synthesizer. Error handling must account for partial failures — if one branch fails, the other should still complete and the synthesizer should handle the missing data gracefully via the existing error fields.
+
+---
+
+## Decision 14: Phase Ordering — Options Analyzer Before RAG
+
+**Date:** March 2026 **Status:** Accepted
+
+**Decision:** Build the Options Analyzer (originally Phase 4) before the RAG pipeline (originally Phase 3).
+
+**Context:** Both phases are independent of each other — neither requires the other to be complete. Options data retrieval is a single yfinance API call; the integration surface is small and well-understood. The RAG pipeline involves SEC EDGAR ingestion, document chunking, embedding with Gemini, and ChromaDB — significantly higher build complexity and more external dependencies. Options analysis also directly extends the existing `stock_analysis` and `options_view` paths that are already wired in the graph.
+
+**Options Considered:**
+
+- **RAG first (original order):** Follows the original PRD phase numbering. RAG adds the deepest analytical depth but is also the most complex build.
+- **Options first (revised order):** Delivers demonstrable multi-dimensional analysis (price + news + sentiment + options) sooner. Simpler build with higher immediate user value per effort unit.
+
+**Choice and Rationale:** Options first. The product is more compelling to demonstrate with all four real-time data dimensions (price, news, sentiment, options) before adding the filing retrieval dimension. RAG doesn't make the existing features better; it adds a fifth dimension. Options makes the existing `stock_analysis` path complete. From an interview portfolio perspective, a working options analyzer is also a stronger demonstration of financial domain depth than a RAG pipeline over SEC filings.
+
+**Tradeoffs Accepted:** The RAG pipeline remains deferred. Queries about earnings management commentary will not be answered until Phase 3 is built. The PRD phase numbering is preserved; only the build order changes.

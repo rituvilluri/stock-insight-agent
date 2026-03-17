@@ -17,6 +17,7 @@ reached and that state fields set by each node flow through correctly.
 from unittest.mock import MagicMock, patch
 
 import pytest
+from langgraph.types import Send
 
 from agent.graph.workflow import (
     route_after_date_parser,
@@ -98,19 +99,27 @@ def test_route_fetch_price_chart_request_to_generate_chart():
     assert route_after_fetch_price(state) == "generate_chart"
 
 
-def test_route_fetch_price_stock_analysis_to_synthesize():
+def _assert_parallel_fan_out(result):
+    """Helper: result must be [Send(retrieve_news), Send(reddit_sentiment)]."""
+    assert isinstance(result, list), "Expected list of Send objects"
+    assert len(result) == 2
+    nodes = {s.node for s in result}
+    assert nodes == {"retrieve_news", "reddit_sentiment"}
+
+
+def test_route_fetch_price_stock_analysis_fans_out():
     state = _state(intent="stock_analysis")
-    assert route_after_fetch_price(state) == "retrieve_news"
+    _assert_parallel_fan_out(route_after_fetch_price(state))
 
 
-def test_route_fetch_price_general_lookup_to_retrieve_news():
+def test_route_fetch_price_general_lookup_fans_out():
     state = _state(intent="general_lookup")
-    assert route_after_fetch_price(state) == "retrieve_news"
+    _assert_parallel_fan_out(route_after_fetch_price(state))
 
 
-def test_route_fetch_price_options_view_to_retrieve_news():
+def test_route_fetch_price_options_view_fans_out():
     state = _state(intent="options_view")
-    assert route_after_fetch_price(state) == "retrieve_news"
+    _assert_parallel_fan_out(route_after_fetch_price(state))
 
 
 # ---------------------------------------------------------------------------

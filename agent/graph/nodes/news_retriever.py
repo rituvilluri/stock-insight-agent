@@ -275,7 +275,6 @@ def retrieve_news(state: AgentState) -> AgentState:
                 )
 
         return {
-            **state,
             "news_articles": articles or None,
             "news_source_used": source_used,
             "news_error": None,
@@ -284,7 +283,6 @@ def retrieve_news(state: AgentState) -> AgentState:
     except Exception as e:
         logger.error("retrieve_news failed: %s", e)
         return {
-            **state,
             "news_articles": None,
             "news_source_used": "none",
             "news_error": str(e),

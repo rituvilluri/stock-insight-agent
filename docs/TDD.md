@@ -64,13 +64,14 @@ User Message
      |
 [Date Parser] (Node 3)
      |
-     |--- intent = "stock_analysis" ----→ [Price Fetcher] (4)
-     |                                    [News Retriever] (5)
-     |                                    [Reddit Sentiment] (6)
-     |                                    [RAG Retriever] (7)
-     |                                           |
+     |--- intent = "stock_analysis" ----→ [Price Fetcher] (4) ──────────────────┐
+     |                                    Send() fan-out:                       │
+     |                                    ├─→ [News Retriever] (5) ──────────┐  │
+     |                                    └─→ [Reddit Sentiment] (6) ────────┘  │
+     |                                    [RAG Retriever] (7) ─────────────────┘
+     |                                           │
      |                                    All results merge into state
-     |                                           |
+     |                                           │
      |                                    [Response Synthesizer] (9)
      |                                           |
      |                                    chart_requested?
