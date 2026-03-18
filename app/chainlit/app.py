@@ -13,9 +13,15 @@ arrive.  All other state fields are collected from on_chain_end events.
 """
 
 import logging
+from pathlib import Path
 
 import chainlit as cl
 import plotly.io as pio
+
+# Chainlit 2.10 requires this directory to exist before rendering any file-backed
+# elements (e.g. Plotly charts). Its session.py calls mkdir(exist_ok=True) on a
+# subdirectory without parents=True, so it silently fails if the parent is absent.
+Path(".files").mkdir(exist_ok=True)
 
 from agent.graph.workflow import app as graph
 
