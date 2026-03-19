@@ -40,12 +40,10 @@ async def chat_profiles():
         cl.ChatProfile(
             name="Quick Analysis",
             markdown_description="Concise summary with key price, news, and sentiment data.",
-            icon="⚡",
         ),
         cl.ChatProfile(
             name="Deep Dive",
             markdown_description="Comprehensive analyst brief with structured sections.",
-            icon="🔬",
         ),
     ]
 
@@ -90,7 +88,7 @@ async def main(message: cl.Message):
     }
 
     # Pre-send a streaming message — synthesizer tokens will fill it in.
-    streaming_msg = cl.Message(content="Analyzing your query...", author=AUTHOR)
+    streaming_msg = cl.Message(content="", author=AUTHOR)
     await streaming_msg.send()
 
     final_state = {}
