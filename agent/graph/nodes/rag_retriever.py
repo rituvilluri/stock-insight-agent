@@ -379,6 +379,14 @@ def _query_collection(
 # Node function
 # ---------------------------------------------------------------------------
 
+# LangSmith observation (2026-03-19): median latency ~1,656ms across 1 run (only
+# full stock_analysis trace in project). Slowest node in the graph.
+# Primary bottleneck: ChromaDB client initialisation + GEMINI_API_KEY absence
+# triggers an early-exit path that still incurs the client startup cost (~1.6s).
+# When GEMINI_API_KEY is present, expect additional latency from Gemini embedding
+# HTTP call + SEC EDGAR fetch on cache miss. Expect 2-5s on first ingestion.
+# Error rate: 0% across all runs — GEMINI_API_KEY absence is handled gracefully
+# via filing_error field, not a raised exception.
 def retrieve_rag_context(state: AgentState) -> AgentState:
     """
     Node 7: RAG Retriever.

@@ -215,6 +215,12 @@ def _fetch_google_rss(
 # Node function
 # ---------------------------------------------------------------------------
 
+# LangSmith observation (2026-03-19): median latency ~1,014ms across 1 run (only
+# full stock_analysis trace in project). Second slowest node in the graph.
+# Primary bottleneck: Google News RSS HTTP round-trip (~1s). NewsAPI path would
+# be faster but NEWSAPI_KEY is absent in this env, so RSS fallback is always used.
+# Error rate: 0% across all runs — RSS fallback absorbs NewsAPI auth failures;
+# no run has ever written a non-null news_error in the current trace set.
 def retrieve_news(state: AgentState) -> AgentState:
     """
     Fetch news articles for the given ticker and date range.
