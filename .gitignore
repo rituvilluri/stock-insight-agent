@@ -27,3 +27,6 @@ app/chainlit/static/charts/*.html
 
 # Claude Code memory and session data (personal, not project config)
 .claude/
+
+# Superpowers planning artifacts (specs and plans are working docs, not codebase artifacts)
+docs/superpowers/
