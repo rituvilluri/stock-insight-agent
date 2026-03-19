@@ -34,6 +34,8 @@ _SUBREDDITS = ["wallstreetbets", "stocks", "options"]
 _MAX_POSTS = 50
 _BATCH_SIZE = 5
 
+# TODO: Push to LangSmith Prompt Hub once Reddit credentials are active and
+# the node is validated end-to-end. Hub name: stock-insight/reddit-sentiment-classifier
 _SENTIMENT_PROMPT = """\
 You are a financial sentiment classifier.
 
