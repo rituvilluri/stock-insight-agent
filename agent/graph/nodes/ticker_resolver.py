@@ -111,6 +111,9 @@ _TICKER_BLOCKLIST = frozenset({
     "TO",
     # Quarter labels — date references, not tickers
     "Q1", "Q2", "Q3", "Q4",
+    # Finance/media vocabulary that appears all-caps but is not a ticker
+    "NYSE", "NASDAQ", "CNBC", "NOW", "YTD", "ATH", "ALL", "DIP",
+    "FROM", "WITH", "BY", "NEW", "EV",
 })
 
 # Regex to detect a standalone ticker: 2-5 uppercase letters, word boundary.

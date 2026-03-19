@@ -26,7 +26,7 @@ with no real user traffic. Boundary cases identified from known patterns:
 import logging
 from typing import Literal
 
-from langchain_core.messages import HumanMessage
+from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from agent.graph.nodes.state import AgentState
@@ -79,7 +79,7 @@ def classify_intent(state: AgentState) -> AgentState:
 
     try:
         chain = _get_structured_chain()
-        result: IntentOutput = chain.invoke([HumanMessage(content=f"System: {_SYSTEM_PROMPT}\n\nUser: {user_message}")])
+        result: IntentOutput = chain.invoke([SystemMessage(content=_SYSTEM_PROMPT), HumanMessage(content=user_message)])
 
         intent = result.intent
         chart_requested = result.chart_requested

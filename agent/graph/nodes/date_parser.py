@@ -64,7 +64,6 @@ _CURRENT_SNAPSHOT_PHRASES = [
     "happening now",
     "current market",
     "current conditions",
-    "right now",
 ]
 
 # ---------------------------------------------------------------------------
