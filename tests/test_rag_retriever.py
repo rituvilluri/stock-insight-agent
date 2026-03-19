@@ -405,3 +405,18 @@ def test_discover_filings_respects_date_range():
 def test_chunk_text_empty_text():
     chunks = _chunk_text("", "NVDA", "10-Q", "2024Q2")
     assert chunks == []
+
+
+def test_returns_only_owned_fields():
+    """
+    After the parallel fan-out fix, retrieve_rag_context must return only
+    its three owned fields. It must NOT spread {**state} back — doing so
+    causes InvalidUpdateError when LangGraph merges parallel branches.
+    """
+    state = {**BASE_STATE, "extra_field_that_should_not_leak": "sentinel"}
+    result = retrieve_rag_context(state)
+    # Only these three keys are allowed in the return dict
+    assert set(result.keys()) == {"filing_chunks", "filing_ingested", "filing_error"}
+    assert "extra_field_that_should_not_leak" not in result
+    assert "user_message" not in result
+    assert "ticker" not in result

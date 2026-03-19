@@ -393,21 +393,16 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
 
     if not ticker:
         logger.debug("retrieve_rag_context: no ticker, skipping")
-        return {**state, "filing_chunks": [], "filing_ingested": False, "filing_error": None}
+        return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
     if not start_date or not end_date:
         logger.debug("retrieve_rag_context: no date range for %s, skipping", ticker)
-        return {**state, "filing_chunks": [], "filing_ingested": False, "filing_error": None}
+        return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
     gemini_api_key = os.getenv("GEMINI_API_KEY")
     if not gemini_api_key:
         logger.warning("retrieve_rag_context: GEMINI_API_KEY not set")
-        return {
-            **state,
-            "filing_chunks": [],
-            "filing_ingested": False,
-            "filing_error": "GEMINI_API_KEY not configured",
-        }
+        return {"filing_chunks": [], "filing_ingested": False, "filing_error": "GEMINI_API_KEY not configured"}
 
     try:
         collection = _get_collection()
@@ -416,18 +411,18 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
         chunks = _query_collection(collection, ticker, user_message)
         if chunks:
             logger.info("retrieve_rag_context: %d chunks retrieved from cache for %s", len(chunks), ticker)
-            return {**state, "filing_chunks": chunks, "filing_ingested": False, "filing_error": None}
+            return {"filing_chunks": chunks, "filing_ingested": False, "filing_error": None}
 
         # Step 2: no cached chunks → discover and ingest from EDGAR
         cik = _get_cik(ticker)
         if not cik:
             logger.info("retrieve_rag_context: CIK not found for %s", ticker)
-            return {**state, "filing_chunks": [], "filing_ingested": False, "filing_error": None}
+            return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
         filings = _discover_filings(cik, ticker, start_date, end_date)
         if not filings:
             logger.info("retrieve_rag_context: no EDGAR filings found for %s in range", ticker)
-            return {**state, "filing_chunks": [], "filing_ingested": False, "filing_error": None}
+            return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
         total_new = 0
         for filing in filings:
@@ -442,13 +437,8 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
             "retrieve_rag_context: ingested %d new chunks, retrieved %d for %s",
             total_new, len(chunks), ticker,
         )
-        return {
-            **state,
-            "filing_chunks": chunks,
-            "filing_ingested": total_new > 0,
-            "filing_error": None,
-        }
+        return {"filing_chunks": chunks, "filing_ingested": total_new > 0, "filing_error": None}
 
     except Exception as e:
         logger.error("retrieve_rag_context failed: %s", e)
-        return {**state, "filing_chunks": [], "filing_ingested": False, "filing_error": str(e)}
+        return {"filing_chunks": [], "filing_ingested": False, "filing_error": str(e)}
