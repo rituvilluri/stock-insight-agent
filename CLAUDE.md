@@ -2,6 +2,9 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Collaboration Style
+- User is learning Claude Code best practices. When a more optimal tool, workflow, or approach is available, suggest it proactively with a brief explanation of why.
+
 ## Project
 AI-powered stock analysis agent. Portfolio project targeting AI engineering and AI PM roles.
 Single-agent LangGraph architecture. NOT multi-agent.
