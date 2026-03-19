@@ -5,9 +5,15 @@ from langchain_groq import ChatGroq
 load_dotenv()
 
 _groq_key = os.getenv("GROQ_API_KEY")
-# Used by classifier/extractor nodes (Intent, Ticker, Date).
-# temperature=0 → deterministic JSON output; no creativity needed here.
+
+# Model selection rationale (2026-03-19 review):
+# llm_classifier uses llama-3.1-8b-instant for structured JSON extraction
+# (intent, ticker, date nodes). temperature=0 → deterministic JSON output.
 # max_tokens=256 → these nodes return small JSON objects, 512 was wasteful.
+# Experiment baseline-4d729529 shows 56% intent accuracy — root cause is
+# prompt quality (no few-shot examples), not model capability. Keeping 8B
+# for now; Agent 1 improves the prompt with few-shot examples targeting 85%+.
+# If accuracy remains below 85% after Agent 1, escalate to llama-3.3-70b-versatile.
 llm_classifier = ChatGroq(
     model="llama-3.1-8b-instant",
     temperature=0,
@@ -38,7 +44,3 @@ llm_synthesizer_deep = ChatGroq(
     groq_api_key=_groq_key,
     streaming=True,
 )
-
-# Legacy alias kept so the existing tool_caller.py and app.py don't break
-# while the Phase 1 rebuild is in progress. Remove once workflow.py is rebuilt.
-llm = llm_classifier

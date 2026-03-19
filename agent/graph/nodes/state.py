@@ -24,6 +24,13 @@ class AgentState(TypedDict, total=False):
     fields marked `Required` must be present before the graph starts; all
     others are written by individual nodes during execution.
 
+    Parallel fan-out safety (Nodes 5, 6, 7 via Send()):
+    LangGraph merges partial dicts from parallel branches by last-write-wins
+    per key. Nodes 5, 6, and 7 write to disjoint key sets (news_*, sentiment_*,
+    filing_* respectively), so there is no collision. `Annotated` reducers are
+    NOT needed for this graph. If a future node writes to the same key as a
+    parallel sibling, use `Annotated[list, operator.add]` for that key.
+
     Field ownership is noted in each comment so it's immediately clear which
     node is responsible for writing — and therefore which node to look at if
     the value is wrong.
