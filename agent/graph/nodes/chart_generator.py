@@ -1,28 +1,19 @@
 """
 Node 10: Chart Generator
 
-Reads:  ticker, price_data (daily_prices), volume_anomaly
+Reads:  ticker, price_data (daily_prices), volume_anomaly, date_context
 Writes: chart_data, chart_error
 
-Generates a Plotly interactive candlestick chart from the daily price data
-already in state. No new API calls — Node 4 (data_fetcher) fetched the
-OHLCV data; this node just visualises it.
+Generates a TradingView-style Plotly interactive candlestick chart.
+Always includes candlestick, volume subplot, and 20-day SMA (when >= 20 data points).
 
-If volume_anomaly.is_anomalous is True, a volume bar subplot is added
-below the candlestick to highlight the unusual trading activity.
-
-The chart is serialised to Plotly's JSON format and stored in chart_data.
-Chainlit deserialises it and renders it as an interactive chart inline.
-
-Why JSON instead of an HTML file?
-Storing the chart as JSON in state keeps the graph stateless — no file
-system writes, no path management, no cleanup. Chainlit can render Plotly
-JSON directly via its native Plotly element support.
+The chart is serialised to Plotly JSON and stored in chart_data.
+Chainlit renders it as an interactive chart inline.
 """
 
-import json
 import logging
 
+import pandas as pd
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
 
@@ -31,23 +22,39 @@ from agent.graph.nodes.state import AgentState
 logger = logging.getLogger(__name__)
 
 
+def _fmt_volume(vol) -> str:
+    """Humanise a raw volume number into M/B/K string for hover tooltips."""
+    if vol is None:
+        return "N/A"
+    try:
+        vol = float(vol)
+    except (TypeError, ValueError):
+        return str(vol)
+    if vol >= 1_000_000_000:
+        return f"{vol / 1_000_000_000:.2f}B"
+    if vol >= 1_000_000:
+        return f"{vol / 1_000_000:.2f}M"
+    if vol >= 1_000:
+        return f"{vol / 1_000:.1f}K"
+    return f"{vol:,.0f}"
+
+
 def _build_chart(
     ticker: str,
     daily_prices: list[dict],
-    volume_anomaly: dict | None,
+    date_context: str = "",
+    volume_anomaly: dict | None = None,
 ) -> go.Figure:
     """
-    Build a Plotly Figure from daily_prices.
+    Build a TradingView-style Plotly Figure from daily_prices.
 
-    If volume_anomaly is present and is_anomalous is True, the figure uses
-    two rows: candlestick on top, volume bars on bottom. Otherwise a single
-    candlestick row is returned.
+    Always includes:
+      - Candlestick trace with UI-matched green/red colors
+      - Volume subplot (bottom 25% of chart height)
+      - 20-day SMA overlay (amber line) when >= 20 data points available
 
-    Why make_subplots even for a single row?
-    Using make_subplots consistently means the downstream rendering logic
-    in Chainlit doesn't need to handle two different figure structures.
-    A single-row make_subplots figure is identical to a plain Figure from
-    Chainlit's perspective.
+    volume_anomaly is retained as a parameter for API compatibility
+    but no longer controls volume visibility.
     """
     dates = [d["date"] for d in daily_prices]
     opens = [d["open"] for d in daily_prices]
@@ -56,25 +63,23 @@ def _build_chart(
     closes = [d["close"] for d in daily_prices]
     volumes = [d["volume"] for d in daily_prices]
 
-    is_anomalous = (
-        volume_anomaly is not None and volume_anomaly.get("is_anomalous", False)
+    # Two-row layout: candlestick (75%) + volume (25%) — always
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        vertical_spacing=0.03,
+        row_heights=[0.75, 0.25],
     )
 
-    if is_anomalous:
-        # Two-row layout: candlestick (70% height) + volume bars (30% height)
-        fig = make_subplots(
-            rows=2,
-            cols=1,
-            shared_xaxes=True,
-            vertical_spacing=0.03,
-            row_heights=[0.7, 0.3],
-        )
-        row_candle = 1
-        row_volume = 2
-    else:
-        fig = make_subplots(rows=1, cols=1)
-        row_candle = 1
-        row_volume = None  # not used
+    # Volume bar colors: green for up days, red for down days
+    bar_colors = [
+        "rgba(0,200,150,0.4)" if c >= o else "rgba(255,77,109,0.4)"
+        for o, c in zip(opens, closes)
+    ]
+
+    # Humanised volume strings for hover tooltip
+    vol_labels = [_fmt_volume(v) for v in volumes]
 
     # Candlestick trace
     fig.add_trace(
@@ -85,58 +90,74 @@ def _build_chart(
             low=lows,
             close=closes,
             name=ticker,
-            increasing_line_color="#26a69a",   # green for up days
-            decreasing_line_color="#ef5350",   # red for down days
+            increasing=dict(line=dict(color="#00c896"), fillcolor="#00c896"),
+            decreasing=dict(line=dict(color="#ff4d6d"), fillcolor="#ff4d6d"),
+            hovertemplate=(
+                f"{ticker} | %{{x|%b %d}}<br>"
+                "O: $%{open:.2f}  H: $%{high:.2f}  L: $%{low:.2f}  C: $%{close:.2f}"
+                "<extra></extra>"
+            ),
         ),
-        row=row_candle,
-        col=1,
+        row=1, col=1,
     )
 
-    # Volume bars (only when anomalous — per TDD)
-    if is_anomalous and row_volume is not None:
-        # Colour volume bars to match candle direction
-        bar_colors = [
-            "#26a69a" if c >= o else "#ef5350"
-            for o, c in zip(opens, closes)
-        ]
-        anomaly_ratio = volume_anomaly.get("anomaly_ratio", "")
-        ratio_label = f" ({anomaly_ratio:.1f}x avg)" if anomaly_ratio else ""
+    # Volume bars
+    fig.add_trace(
+        go.Bar(
+            x=dates,
+            y=volumes,
+            name="Volume",
+            marker_color=bar_colors,
+            text=vol_labels,
+            hovertemplate="Vol: %{text}<extra></extra>",
+        ),
+        row=2, col=1,
+    )
 
+    # 20-day SMA overlay (only when enough data)
+    if len(closes) >= 20:
+        sma_series = pd.Series(closes).rolling(window=20).mean().dropna()
+        sma_dates = dates[19:]  # align to the dates where SMA is valid
         fig.add_trace(
-            go.Bar(
-                x=dates,
-                y=volumes,
-                name=f"Volume{ratio_label}",
-                marker_color=bar_colors,
-                opacity=0.7,
+            go.Scatter(
+                x=sma_dates,
+                y=sma_series.tolist(),
+                name="20d SMA",
+                line=dict(color="#f0b429", width=1.5),
+                hovertemplate="20d SMA: $%{y:.2f}<extra></extra>",
             ),
-            row=row_volume,
-            col=1,
+            row=1, col=1,
         )
 
-    # Layout styling
-    start = dates[0] if dates else ""
-    end = dates[-1] if dates else ""
-    title = f"{ticker} — {start} to {end}"
-    if is_anomalous:
-        title += "  ⚠ Unusual volume detected"
+    # Chart title
+    title = f"{ticker} — {date_context}" if date_context else f"{ticker} — {dates[0]} to {dates[-1]}"
 
+    # Layout
     fig.update_layout(
-        title=title,
-        xaxis_rangeslider_visible=False,   # hide range slider for cleaner look
-        plot_bgcolor="#1e1e2e",
-        paper_bgcolor="#1e1e2e",
-        font_color="#cdd6f4",
+        template="plotly_dark",
+        title=dict(text=title, font=dict(size=16)),
+        plot_bgcolor="#0f1117",
+        paper_bgcolor="#0f1117",
+        font=dict(color="#e6edf3"),
         showlegend=True,
-        margin={"l": 40, "r": 20, "t": 60, "b": 40},
+        xaxis_rangeslider_visible=False,
+        margin=dict(l=50, r=20, t=60, b=40),
     )
 
     fig.update_yaxes(
-        gridcolor="#313244",
-        zerolinecolor="#313244",
+        gridcolor="rgba(255,255,255,0.04)",
+        zerolinecolor="rgba(255,255,255,0.04)",
+        tickformat="$,.2f",
+        row=1, col=1,
+    )
+    fig.update_yaxes(
+        gridcolor="rgba(255,255,255,0.04)",
+        tickformat=",",
+        row=2, col=1,
     )
     fig.update_xaxes(
-        gridcolor="#313244",
+        gridcolor="rgba(255,255,255,0.04)",
+        tickformat="%b %d",
     )
 
     return fig
@@ -150,8 +171,8 @@ def generate_chart(state: AgentState) -> AgentState:
     ticker = state.get("ticker", "")
     price_data = state.get("price_data")
     volume_anomaly = state.get("volume_anomaly")
+    date_context = state.get("date_context", "")
 
-    # Guard: if data_fetcher failed, price_data will be None
     if not price_data:
         msg = "chart_generator: price_data is missing — cannot generate chart"
         logger.warning(msg)
@@ -165,14 +186,13 @@ def generate_chart(state: AgentState) -> AgentState:
         return {**state, "chart_data": None, "chart_error": msg}
 
     try:
-        fig = _build_chart(ticker, daily_prices, volume_anomaly)
+        fig = _build_chart(ticker, daily_prices, date_context, volume_anomaly)
         chart_json = fig.to_json()
 
         logger.info(
-            "generate_chart → %s (%d candles, anomalous=%s)",
+            "generate_chart → %s (%d candles)",
             ticker,
             len(daily_prices),
-            bool(volume_anomaly and volume_anomaly.get("is_anomalous")),
         )
 
         return {**state, "chart_data": chart_json, "chart_error": None}
