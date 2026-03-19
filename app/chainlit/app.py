@@ -10,6 +10,9 @@ Reads from AgentState fields written by the workflow nodes:
 
 Uses graph.astream_events to stream synthesizer tokens to the UI as they
 arrive.  All other state fields are collected from on_chain_end events.
+
+Pipeline progress is surfaced via cl.Step cards — one per node — so users
+see incremental progress rather than a blank wait during the 5-10s pipeline.
 """
 
 import logging
@@ -28,6 +31,24 @@ from agent.graph.workflow import app as graph
 logger = logging.getLogger(__name__)
 
 AUTHOR = "Stock Insight Agent"
+
+# ---------------------------------------------------------------------------
+# Node display names for cl.Step pipeline visibility
+# ---------------------------------------------------------------------------
+# Maps LangGraph node names to human-readable step labels shown in the UI.
+# None means the node is shown via streaming output instead of a step card.
+_NODE_DISPLAY_NAMES = {
+    "classify_intent": "Classifying intent",
+    "resolve_ticker": "Resolving ticker",
+    "parse_dates": "Parsing date range",
+    "fetch_price": "Fetching price data",
+    "retrieve_news": "Retrieving news",
+    "reddit_sentiment": "Analyzing Reddit sentiment",
+    "retrieve_rag": "Searching SEC filings",
+    "analyze_options": "Analyzing options chain",
+    "synthesize": None,       # shown via streaming tokens — no step card
+    "generate_chart": "Generating chart",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -78,7 +99,9 @@ async def start():
 
 @cl.on_message
 async def main(message: cl.Message):
-    # Seed initial state with context from the previous turn (if any).
+    # Session memory: we seed last_context from cl.user_session into initial_state.
+    # LangGraph MemorySaver checkpointer was evaluated (Agent 0) and deferred —
+    # current approach is simpler and sufficient for this single-user session model.
     last_context = cl.user_session.get("last_context") or {}
     profile = cl.user_session.get("chat_profile") or "Quick Analysis"
     response_depth = "deep" if profile == "Deep Dive" else "quick"
@@ -90,18 +113,32 @@ async def main(message: cl.Message):
     }
 
     # Pre-send a streaming message — synthesizer tokens will fill it in.
-    streaming_msg = cl.Message(content="Analyzing your query...", author=AUTHOR)
+    streaming_msg = cl.Message(content="", author=AUTHOR)
     await streaming_msg.send()
 
-    final_state = {}
+    final_state: dict = {}
+    active_steps: dict[str, cl.Step] = {}
 
     try:
         async for event in graph.astream_events(initial_state, version="v2"):
             kind = event["event"]
             node = event.get("metadata", {}).get("langgraph_node", "")
 
+            # Open a step card when a known pipeline node starts.
+            if kind == "on_chain_start" and node in _NODE_DISPLAY_NAMES:
+                display_name = _NODE_DISPLAY_NAMES.get(node)
+                if display_name:
+                    step = cl.Step(name=display_name, type="run")
+                    await step.__aenter__()
+                    active_steps[node] = step
+
+            # Close the step card when the node completes.
+            elif kind == "on_chain_end" and node in active_steps:
+                step = active_steps.pop(node)
+                await step.__aexit__(None, None, None)
+
             # Stream tokens from the synthesizer's LLM call token-by-token.
-            if kind == "on_chat_model_stream" and node == "synthesize":
+            elif kind == "on_chat_model_stream" and node == "synthesize":
                 chunk = event["data"]["chunk"]
                 if chunk.content:
                     await streaming_msg.stream_token(chunk.content)
@@ -113,6 +150,9 @@ async def main(message: cl.Message):
                     final_state.update(output)
 
     except Exception as e:
+        # Close any open steps on error.
+        for step in active_steps.values():
+            await step.__aexit__(None, None, None)
         logger.error("Graph streaming failed: %s", e)
         streaming_msg.content = (
             f"Something went wrong running the analysis:\n\n`{e}`\n\n"
