@@ -35,8 +35,14 @@ from typing import Optional
 from bs4 import BeautifulSoup
 
 import chromadb
-from google import genai
-from google.genai import types as genai_types
+try:
+    from google import genai
+    from google.genai import types as genai_types
+    _GENAI_AVAILABLE = True
+except ImportError:
+    genai = None  # type: ignore[assignment]
+    genai_types = None  # type: ignore[assignment]
+    _GENAI_AVAILABLE = False
 import requests
 
 from agent.graph.nodes.state import AgentState
@@ -125,37 +131,83 @@ def _chunk_text(text: str, ticker: str, filing_type: str, period: str) -> list[d
 # Embedding
 # ---------------------------------------------------------------------------
 
-def _get_genai_client() -> genai.Client:
-    return genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+def _get_embedding_fn():
+    """
+    Return (embed_texts_fn, embed_query_fn) based on available credentials.
+
+    Priority:
+      1. Google Gemini text-embedding-004 if GEMINI_API_KEY is set.
+      2. sentence-transformers all-MiniLM-L6-v2 as a local fallback.
+
+    The sentence-transformers fallback produces 384-dim vectors vs Gemini's
+    768-dim vectors.  Both work with ChromaDB's cosine distance metric, but
+    embeddings from different models are NOT interchangeable — a fresh
+    collection should be used when switching models.
+    """
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if gemini_key and _GENAI_AVAILABLE:
+        client = genai.Client(api_key=gemini_key)
+
+        def embed_texts_gemini(texts: list[str]) -> list[list[float]]:
+            all_vectors = []
+            for i in range(0, len(texts), 100):
+                batch = texts[i : i + 100]
+                response = client.models.embed_content(
+                    model=EMBEDDING_MODEL,
+                    contents=batch,
+                    config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
+                )
+                all_vectors.extend([e.values for e in response.embeddings])
+            return all_vectors
+
+        def embed_query_gemini(text: str) -> list[float]:
+            response = client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=text,
+                config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
+            )
+            return response.embeddings[0].values
+
+        return embed_texts_gemini, embed_query_gemini
+
+    # Fallback: sentence-transformers all-MiniLM-L6-v2 (local, no API key needed)
+    logger.warning(
+        "GEMINI_API_KEY not set — falling back to sentence-transformers all-MiniLM-L6-v2. "
+        "Embeddings are 384-dim (vs Gemini 768-dim). Use a separate ChromaDB collection "
+        "to avoid mixing incompatible vectors."
+    )
+    from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+    _st_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    def embed_texts_st(texts: list[str]) -> list[list[float]]:
+        return _st_model.encode(texts, show_progress_bar=False).tolist()
+
+    def embed_query_st(text: str) -> list[float]:
+        return _st_model.encode([text], show_progress_bar=False)[0].tolist()
+
+    return embed_texts_st, embed_query_st
+
+
+# Module-level embed functions — resolved once at import time if GEMINI_API_KEY
+# is set, or lazily on first call via _get_embedding_fn().
+_embed_texts_fn = None
+_embed_query_fn = None
 
 
 def _embed_texts(texts: list[str]) -> list[list[float]]:
-    """
-    Batch-embed texts using Gemini text-embedding-004.
-    Processes in batches of 100 (API limit).
-    """
-    client = _get_genai_client()
-    all_vectors = []
-    batch_size = 100
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
-        response = client.models.embed_content(
-            model=EMBEDDING_MODEL,
-            contents=batch,
-            config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-        )
-        all_vectors.extend([e.values for e in response.embeddings])
-    return all_vectors
+    """Batch-embed texts using the active embedding backend."""
+    global _embed_texts_fn, _embed_query_fn
+    if _embed_texts_fn is None:
+        _embed_texts_fn, _embed_query_fn = _get_embedding_fn()
+    return _embed_texts_fn(texts)
 
 
 def _embed_query(text: str) -> list[float]:
-    client = _get_genai_client()
-    response = client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=text,
-        config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
-    )
-    return response.embeddings[0].values
+    """Embed a query string using the active embedding backend."""
+    global _embed_texts_fn, _embed_query_fn
+    if _embed_query_fn is None:
+        _embed_texts_fn, _embed_query_fn = _get_embedding_fn()
+    return _embed_query_fn(text)
 
 
 # ---------------------------------------------------------------------------
@@ -396,11 +448,6 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
     if not start_date or not end_date:
         logger.debug("retrieve_rag_context: no date range for %s, skipping", ticker)
         return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
-
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_api_key:
-        logger.warning("retrieve_rag_context: GEMINI_API_KEY not set")
-        return {"filing_chunks": [], "filing_ingested": False, "filing_error": "GEMINI_API_KEY not configured"}
 
     try:
         collection = _get_collection()
