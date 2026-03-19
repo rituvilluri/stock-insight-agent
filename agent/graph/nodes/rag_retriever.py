@@ -30,8 +30,9 @@ import os
 import re
 import time
 from datetime import datetime
-from html.parser import HTMLParser
 from typing import Optional
+
+from bs4 import BeautifulSoup
 
 import chromadb
 from google import genai
@@ -66,30 +67,25 @@ _MAX_FILINGS_TO_INGEST = 3   # cap ingestion per query to stay within rate limit
 # HTML cleaning
 # ---------------------------------------------------------------------------
 
-class _TagStripper(HTMLParser):
-    """Minimal HTML → plain text converter (no third-party deps)."""
-
-    def __init__(self):
-        super().__init__()
-        self._parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        self._parts.append(data)
-
-    def get_text(self) -> str:
-        return " ".join(self._parts)
-
-
 def _strip_html(html: str) -> str:
-    parser = _TagStripper()
+    """
+    Extract plain text from SEC filing HTML using BeautifulSoup4.
+
+    Why BeautifulSoup over stdlib HTMLParser?
+    SEC 10-K/10-Q filings contain <style>, <script>, and inline XBRL tags
+    that HTMLParser includes verbatim. BeautifulSoup lets us decompose
+    unwanted tags before extracting text, producing clean prose.
+    """
     try:
-        parser.feed(html)
-    except Exception:
-        pass
-    text = parser.get_text()
-    # Collapse whitespace runs
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["style", "script", "meta", "link", "head"]):
+            tag.decompose()
+        text = soup.get_text(separator=" ")
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+    except Exception as e:
+        logger.warning("_strip_html failed: %s — returning empty string", e)
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -271,9 +267,11 @@ def _discover_filings(cik: str, ticker: str, start_date: str, end_date: str) -> 
 
 def _download_filing(cik: str, accession_no: str, primary_doc: str) -> Optional[str]:
     """Download a filing document from EDGAR and return clean plain text."""
-    # Format accession number with dashes for the URL
-    acc_dashed = f"{accession_no[:10]}-{accession_no[10:12]}-{accession_no[12:]}"
-    url = f"{EDGAR_FILING_BASE}/{int(cik)}/{acc_dashed}/{primary_doc}"
+    # EDGAR Archive URLs use the accession number WITHOUT dashes in the path segment.
+    # e.g. /Archives/edgar/data/{cik}/{acc_no_dashes}/{primary_doc}
+    # accession_no is already stored without dashes by _discover_filings.
+    acc_no_dashes = accession_no.replace("-", "")
+    url = f"{EDGAR_FILING_BASE}/{int(cik)}/{acc_no_dashes}/{primary_doc}"
     resp = _edgar_get(url)
     if not resp:
         return None

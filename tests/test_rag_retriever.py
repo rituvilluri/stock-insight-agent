@@ -420,3 +420,24 @@ def test_returns_only_owned_fields():
     assert "extra_field_that_should_not_leak" not in result
     assert "user_message" not in result
     assert "ticker" not in result
+
+
+def test_strip_html_removes_style_and_script():
+    html = """
+    <html><head><style>body { margin: 0; }</style>
+    <script>alert('test');</script></head>
+    <body><p>Revenue was $44.1 billion in Q3 2024.</p>
+    <table><tr><td>Net income</td><td>$18.8B</td></tr></table>
+    </body></html>
+    """
+    result = _strip_html(html)
+    assert "margin" not in result
+    assert "alert" not in result
+    assert "Revenue" in result
+    assert "Net income" in result
+
+
+def test_strip_html_minimum_length():
+    html = "<html><body>" + "<p>This is important financial information. " * 100 + "</p></body></html>"
+    result = _strip_html(html)
+    assert len(result) > 500
