@@ -158,7 +158,7 @@ def _classify_batch(batch: list[dict]) -> list[str]:
         raw = response.content.strip()
         if raw.startswith("```"):
             raw = raw.split("```")[1]
-            if raw.startswith("json"):
+            if raw.lower().startswith("json"):
                 raw = raw[4:]
             raw = raw.strip()
 

@@ -488,7 +488,13 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
 
         total_new = 0
         for filing in filings:
-            total_new += _ingest_filing(collection, filing, ticker)
+            try:
+                total_new += _ingest_filing(collection, filing, ticker)
+            except Exception as ingest_err:
+                logger.warning(
+                    "retrieve_rag_context: _ingest_filing failed for %s %s — skipping: %s",
+                    ticker, filing.get("period"), ingest_err,
+                )
 
         if total_new == 0:
             logger.info("retrieve_rag_context: filings already ingested or empty for %s", ticker)

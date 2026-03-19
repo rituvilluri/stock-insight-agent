@@ -130,7 +130,7 @@ def _fetch_newsapi(
         if response.get("status") == "error":
             error_code = response.get("code", "")
             message = response.get("message", "")
-            if error_code == "parameterInvalid" or "upgrade" in message.lower():
+            if error_code == "parameterInvalid":
                 logger.warning(
                     "NewsAPI: date range [%s → %s] is outside free tier coverage (last 30 days). "
                     "Upgrade to a paid plan for historical access.",
