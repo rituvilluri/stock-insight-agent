@@ -153,12 +153,25 @@ def _get_embedding_fn():
             all_vectors = []
             for i in range(0, len(texts), 100):
                 batch = texts[i : i + 100]
-                response = client.models.embed_content(
-                    model=EMBEDDING_MODEL,
-                    contents=batch,
-                    config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-                )
-                all_vectors.extend([e.values for e in response.embeddings])
+                # Gemini free tier: 100 req/min. Add inter-batch delay to avoid 429.
+                if i > 0:
+                    time.sleep(1.0)
+                for attempt in range(3):
+                    try:
+                        response = client.models.embed_content(
+                            model=EMBEDDING_MODEL,
+                            contents=batch,
+                            config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
+                        )
+                        all_vectors.extend([e.values for e in response.embeddings])
+                        break
+                    except Exception as e:
+                        if "429" in str(e) and attempt < 2:
+                            wait = 60 * (attempt + 1)
+                            logger.warning("Gemini rate limit hit — waiting %ds before retry", wait)
+                            time.sleep(wait)
+                        else:
+                            raise
             return all_vectors
 
         def embed_query_gemini(text: str) -> list[float]:
