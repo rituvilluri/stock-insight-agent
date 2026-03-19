@@ -195,3 +195,39 @@ def test_node_preserves_existing_state_fields():
     assert result["intent"] == "stock_analysis"
     assert result["chart_requested"] is False
     assert result["ticker"] == "NVDA"
+
+
+# ---------------------------------------------------------------------------
+# Blocklist: common all-caps words must not be extracted as tickers
+# ---------------------------------------------------------------------------
+
+def test_ceo_not_extracted_as_ticker():
+    """CEO is in the blocklist; NVDA in the same message should still resolve."""
+    state = {"user_message": "What is the CEO saying about NVDA?", "user_config": {}}
+    result = resolve_ticker(state)
+    assert result["ticker"] == "NVDA"
+
+
+# ---------------------------------------------------------------------------
+# Extended lookup table entries
+# ---------------------------------------------------------------------------
+
+def test_meta_lookup():
+    """'Meta' (company name) should resolve via lookup table to META ticker."""
+    state = {"user_message": "How did Meta do last month?", "user_config": {}}
+    result = resolve_ticker(state)
+    assert result["ticker"] == "META"
+
+
+def test_broadcom_lookup():
+    """'broadcom' should resolve to AVGO."""
+    state = {"user_message": "What happened with Broadcom last quarter?", "user_config": {}}
+    result = resolve_ticker(state)
+    assert result["ticker"] == "AVGO"
+
+
+def test_avgo_direct_ticker():
+    """AVGO typed directly should pass through Layer 1."""
+    state = {"user_message": "How did AVGO perform last week?", "user_config": {}}
+    result = resolve_ticker(state)
+    assert result["ticker"] == "AVGO"
