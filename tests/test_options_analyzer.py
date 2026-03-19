@@ -270,3 +270,25 @@ def test_options_data_preserves_existing_state(mock_ticker_class):
 
     assert result["intent"] == "options_view"
     assert result["company_name"] == "Apple"
+
+
+# ---------------------------------------------------------------------------
+# Black-Scholes correctness tests — known analytical values
+# ---------------------------------------------------------------------------
+
+def test_black_scholes_call_delta_known_value():
+    """
+    Known test case: S=100, K=100, T=1yr, r=5%, sigma=20%
+    Expected call delta ~0.637 (d1 = 0.35, N(0.35) = 0.6368).
+    """
+    result = _black_scholes_greeks(S=100, K=100, T=1.0, r=0.05, sigma=0.20, option_type="call")
+    assert abs(result["delta"] - 0.637) < 0.005
+    assert result["delta"] > 0
+    assert result["gamma"] > 0
+
+
+def test_black_scholes_put_delta_known_value():
+    """Put delta must equal call delta - 1 (put-call parity)."""
+    call = _black_scholes_greeks(S=100, K=100, T=1.0, r=0.05, sigma=0.20, option_type="call")
+    put = _black_scholes_greeks(S=100, K=100, T=1.0, r=0.05, sigma=0.20, option_type="put")
+    assert abs(put["delta"] - (call["delta"] - 1)) < 0.001
