@@ -13,10 +13,16 @@ Key mocking note:
 
 import math
 from collections import namedtuple
+from datetime import datetime, timedelta
 from unittest.mock import MagicMock, patch
 
 import pandas as pd
 import pytest
+
+# Use relative future dates so tests don't exercise the T-floor path unintentionally.
+_EXPIRY_45D = (datetime.now() + timedelta(days=45)).strftime("%Y-%m-%d")
+_EXPIRY_75D = (datetime.now() + timedelta(days=75)).strftime("%Y-%m-%d")
+_EXPIRY_180D = (datetime.now() + timedelta(days=180)).strftime("%Y-%m-%d")
 
 from agent.graph.nodes.options_analyzer import (
     analyze_options,
@@ -154,7 +160,7 @@ def test_options_data_populated_on_success(mock_ticker_class):
     chain = OptionChain(calls=calls, puts=puts)
 
     mock_instance = MagicMock()
-    mock_instance.options = ("2024-06-21", "2024-07-19", "2024-09-20")
+    mock_instance.options = (_EXPIRY_45D, _EXPIRY_75D, _EXPIRY_180D)
     mock_instance.option_chain.return_value = chain
     mock_ticker_class.return_value = mock_instance
 
@@ -182,7 +188,7 @@ def test_put_call_ratio_calculation(mock_ticker_class):
     chain = OptionChain(calls=calls, puts=puts)
 
     mock_instance = MagicMock()
-    mock_instance.options = ("2024-06-21",)
+    mock_instance.options = (_EXPIRY_45D,)
     mock_instance.option_chain.return_value = chain
     mock_ticker_class.return_value = mock_instance
 
@@ -203,7 +209,7 @@ def test_greeks_sample_populated_when_price_available(mock_ticker_class):
     chain = OptionChain(calls=calls, puts=puts)
 
     mock_instance = MagicMock()
-    mock_instance.options = ("2024-06-21",)
+    mock_instance.options = (_EXPIRY_45D,)
     mock_instance.option_chain.return_value = chain
     mock_ticker_class.return_value = mock_instance
 
@@ -233,7 +239,7 @@ def test_options_error_written_when_no_expiry_dates(mock_ticker_class):
 def test_options_error_written_on_exception(mock_ticker_class):
     """If yfinance raises during option_chain(), options_error must be set."""
     mock_instance = MagicMock()
-    mock_instance.options = ("2024-06-21",)
+    mock_instance.options = (_EXPIRY_45D,)
     mock_instance.option_chain.side_effect = Exception("network timeout")
     mock_ticker_class.return_value = mock_instance
 
@@ -261,7 +267,7 @@ def test_options_data_preserves_existing_state(mock_ticker_class):
     chain = OptionChain(calls=calls, puts=puts)
 
     mock_instance = MagicMock()
-    mock_instance.options = ("2024-06-21",)
+    mock_instance.options = (_EXPIRY_45D,)
     mock_instance.option_chain.return_value = chain
     mock_ticker_class.return_value = mock_instance
 
@@ -270,3 +276,34 @@ def test_options_data_preserves_existing_state(mock_ticker_class):
 
     assert result["intent"] == "options_view"
     assert result["company_name"] == "Apple"
+
+
+# ---------------------------------------------------------------------------
+# Black-Scholes correctness tests — known analytical values
+# ---------------------------------------------------------------------------
+
+def test_black_scholes_call_delta_known_value():
+    """
+    Known test case: S=100, K=100, T=1yr, r=5%, sigma=20%
+    Expected call delta ~0.637 (d1 = 0.35, N(0.35) = 0.6368).
+    """
+    result = _black_scholes_greeks(S=100, K=100, T=1.0, r=0.05, sigma=0.20, option_type="call")
+    assert abs(result["delta"] - 0.637) < 0.005
+    assert result["delta"] > 0
+    assert result["gamma"] > 0
+
+
+def test_black_scholes_put_delta_known_value():
+    """Put delta must equal call delta - 1 (put-call parity)."""
+    call = _black_scholes_greeks(S=100, K=100, T=1.0, r=0.05, sigma=0.20, option_type="call")
+    put = _black_scholes_greeks(S=100, K=100, T=1.0, r=0.05, sigma=0.20, option_type="put")
+    assert abs(put["delta"] - (call["delta"] - 1)) < 0.001
+
+
+def test_black_scholes_nan_sigma_returns_none_greeks():
+    """NaN implied volatility must return None for all Greeks, not propagate NaN."""
+    result = _black_scholes_greeks(S=180.0, K=180.0, T=0.25, sigma=float("nan"))
+    assert result["delta"] is None
+    assert result["gamma"] is None
+    assert result["theta"] is None
+    assert result["vega"] is None

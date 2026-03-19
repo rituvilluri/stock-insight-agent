@@ -34,4 +34,5 @@ praw
 # Utilities
 tqdm
 pytest  # For testing
+pytest-asyncio  # Async test support for async node functions
 
