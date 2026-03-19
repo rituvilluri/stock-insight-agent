@@ -1,143 +1,108 @@
-/* Custom Chainlit Styling */
+/* Stock Insight Agent — Dark Finance Theme
+   Targets Chainlit 2.x-compatible selectors only.
+   Class names like .cl-message do not exist in Chainlit 2.x — do not add them.
+*/
 
-/* Main chat container */
-.cl-chat-container {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    border-radius: 12px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+
+/* ── Base ─────────────────────────────────────────────────────────────── */
+
+body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+    background-color: #0f1117;
+    color: #e6edf3;
 }
 
-/* Message bubbles */
-.cl-message {
-    border-radius: 18px;
-    margin: 8px 0;
-    box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
-    transition: all 0.3s ease;
+/* ── Message step containers ──────────────────────────────────────────── */
+
+.step {
+    background-color: #161b22;
+    border: 1px solid rgba(0, 200, 150, 0.12);
+    border-radius: 10px;
+    box-shadow: 0 0 12px rgba(0, 200, 150, 0.04);
+    margin: 6px 0;
+    padding: 2px 0;
+    transition: border-color 0.2s ease;
 }
 
-.cl-message:hover {
-    transform: translateY(-2px);
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.15);
+.step:hover {
+    border-color: rgba(0, 200, 150, 0.25);
 }
 
-/* User messages */
-.cl-message-user {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    border: none;
+/* ── Chat input ───────────────────────────────────────────────────────── */
+
+[data-testid="chat-input"] {
+    background-color: #161b22 !important;
+    border: 1px solid rgba(0, 200, 150, 0.2) !important;
+    border-radius: 12px !important;
+    color: #e6edf3 !important;
+    transition: border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-/* Assistant messages */
-.cl-message-assistant {
-    background: linear-gradient(135deg, #f093fb 0%, #f5576c 100%);
-    color: white;
-    border: none;
+[data-testid="chat-input"]:focus-within {
+    border-color: #00c896 !important;
+    box-shadow: 0 0 0 3px rgba(0, 200, 150, 0.12) !important;
 }
 
-/* Input area */
-.cl-input-container {
-    background: rgba(255, 255, 255, 0.95);
-    border-radius: 25px;
-    border: 2px solid #e1e5e9;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
-    transition: all 0.3s ease;
-}
+/* ── Scrollbar ────────────────────────────────────────────────────────── */
 
-.cl-input-container:focus-within {
-    border-color: #667eea;
-    box-shadow: 0 4px 20px rgba(102, 126, 234, 0.3);
-}
-
-/* Send button */
-.cl-send-button {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    border-radius: 50%;
-    border: none;
-    transition: all 0.3s ease;
-}
-
-.cl-send-button:hover {
-    transform: scale(1.1);
-    box-shadow: 0 4px 16px rgba(102, 126, 234, 0.4);
-}
-
-/* Header styling */
-.cl-header {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    color: white;
-    padding: 20px;
-    border-radius: 12px 12px 0 0;
-}
-
-/* Sidebar styling */
-.cl-sidebar {
-    background: rgba(255, 255, 255, 0.95);
-    backdrop-filter: blur(10px);
-    border-right: 1px solid #e1e5e9;
-}
-
-/* Loading animation */
-.cl-loading {
-    background: linear-gradient(90deg, #667eea, #764ba2, #667eea);
-    background-size: 200% 100%;
-    animation: loading 2s infinite;
-}
-
-@keyframes loading {
-    0% { background-position: 200% 0; }
-    100% { background-position: -200% 0; }
-}
-
-/* Custom scrollbar */
 ::-webkit-scrollbar {
-    width: 8px;
+    width: 6px;
+    height: 6px;
 }
 
 ::-webkit-scrollbar-track {
-    background: #f1f1f1;
-    border-radius: 4px;
+    background: #0f1117;
 }
 
 ::-webkit-scrollbar-thumb {
-    background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
-    border-radius: 4px;
+    background: rgba(0, 200, 150, 0.4);
+    border-radius: 3px;
 }
 
 ::-webkit-scrollbar-thumb:hover {
-    background: linear-gradient(135deg, #5a6fd8 0%, #6a4190 100%);
+    background: rgba(0, 200, 150, 0.7);
 }
 
-/* Tool usage indicators */
-.cl-tool-usage {
-    background: rgba(102, 126, 234, 0.1);
-    border-left: 4px solid #667eea;
-    border-radius: 8px;
-    padding: 12px;
-    margin: 8px 0;
+/* ── Links ────────────────────────────────────────────────────────────── */
+
+a {
+    color: #00c896;
+    text-decoration: none;
 }
 
-/* File upload area */
-.cl-file-upload {
-    border: 2px dashed #667eea;
-    border-radius: 12px;
-    background: rgba(102, 126, 234, 0.05);
-    transition: all 0.3s ease;
+a:hover {
+    text-decoration: underline;
+    color: #00e6b0;
 }
 
-.cl-file-upload:hover {
-    border-color: #764ba2;
-    background: rgba(102, 126, 234, 0.1);
+/* ── Code blocks ─────────────────────────────────────────────────────── */
+
+code {
+    background-color: #1c2128;
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 4px;
+    padding: 1px 5px;
+    font-size: 0.88em;
+    color: #00c896;
 }
 
-/* Responsive design */
-@media (max-width: 768px) {
-    .cl-chat-container {
-        border-radius: 8px;
-        margin: 8px;
-    }
-    
-    .cl-message {
-        border-radius: 16px;
-        margin: 6px 0;
-    }
-} 
+pre code {
+    background: transparent;
+    border: none;
+    padding: 0;
+    color: inherit;
+}
+
+/* ── Accent elements (buttons, active states) ─────────────────────────── */
+
+button[data-testid="send-button"] {
+    background-color: #00c896 !important;
+    border-radius: 8px !important;
+    transition: background-color 0.2s ease, transform 0.1s ease;
+}
+
+button[data-testid="send-button"]:hover {
+    background-color: #00e6b0 !important;
+    transform: scale(1.04);
+}
