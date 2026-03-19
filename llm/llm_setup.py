@@ -15,6 +15,14 @@ llm_classifier = ChatGroq(
     groq_api_key=_groq_key,
 )
 
+# Model selection rationale (2026-03-19 review):
+# llm_classifier uses llama-3.1-8b-instant for structured JSON extraction
+# (intent, ticker, date nodes). Experiment baseline-4d729529 shows 56% intent
+# accuracy — root cause is prompt quality (no few-shot examples), not model
+# capability. Keeping 8B for now; Agent 1 improves the prompt with few-shot
+# examples targeting 85%+. If accuracy remains below 85% after Agent 1,
+# escalate llm_classifier to llama-3.3-70b-versatile.
+
 # Used by the Response Synthesizer (Node 9).
 # temperature=0.3 → slight variation for natural-sounding prose.
 # max_tokens=1024 → narrative responses need more room than JSON classifiers.
@@ -38,7 +46,3 @@ llm_synthesizer_deep = ChatGroq(
     groq_api_key=_groq_key,
     streaming=True,
 )
-
-# Legacy alias kept so the existing tool_caller.py and app.py don't break
-# while the Phase 1 rebuild is in progress. Remove once workflow.py is rebuilt.
-llm = llm_classifier
