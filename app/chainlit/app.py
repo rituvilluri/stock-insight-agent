@@ -31,14 +31,36 @@ AUTHOR = "Stock Insight Agent"
 
 
 # ---------------------------------------------------------------------------
+# Chat profiles
+# ---------------------------------------------------------------------------
+
+@cl.set_chat_profiles
+async def chat_profiles():
+    return [
+        cl.ChatProfile(
+            name="Quick Analysis",
+            markdown_description="Concise summary with key price, news, and sentiment data.",
+            icon="⚡",
+        ),
+        cl.ChatProfile(
+            name="Deep Dive",
+            markdown_description="Comprehensive analyst brief with structured sections.",
+            icon="🔬",
+        ),
+    ]
+
+
+# ---------------------------------------------------------------------------
 # Chat start
 # ---------------------------------------------------------------------------
 
 @cl.on_chat_start
 async def start():
+    profile = cl.user_session.get("chat_profile") or "Quick Analysis"
+    mode_note = "Deep Dive mode — structured analyst briefs." if profile == "Deep Dive" else "Quick Analysis mode — concise summaries."
     await cl.Message(
         content=(
-            "**Welcome to the Stock Insight Agent**\n\n"
+            f"**Welcome to the Stock Insight Agent** · {mode_note}\n\n"
             "Ask me about any stock's performance over a time period. Examples:\n\n"
             "- *How did NVIDIA do last month?*\n"
             "- *Show me a chart of Tesla from Q1 2024*\n"
@@ -58,14 +80,17 @@ async def start():
 async def main(message: cl.Message):
     # Seed initial state with context from the previous turn (if any).
     last_context = cl.user_session.get("last_context") or {}
+    profile = cl.user_session.get("chat_profile") or "Quick Analysis"
+    response_depth = "deep" if profile == "Deep Dive" else "quick"
     initial_state = {
         "user_message": message.content,
         "user_config": {},   # no user-supplied API keys yet (Phase 5)
+        "response_depth": response_depth,
         **last_context,
     }
 
     # Pre-send a streaming message — synthesizer tokens will fill it in.
-    streaming_msg = cl.Message(content="", author=AUTHOR)
+    streaming_msg = cl.Message(content="Analyzing your query...", author=AUTHOR)
     await streaming_msg.send()
 
     final_state = {}
@@ -123,7 +148,7 @@ async def main(message: cl.Message):
         cl.user_session.set("last_context", saved)
 
     # ------------------------------------------------------------------
-    # Send sources as a formatted list (if any)
+    # Send sources as a collapsible element (if any)
     # ------------------------------------------------------------------
     sources_cited = final_state.get("sources_cited") or []
     if sources_cited:
@@ -138,8 +163,18 @@ async def main(message: cl.Message):
             else:
                 source_lines.append(f"{icon} {label}")
 
-        sources_text = "**Sources**\n\n" + "\n\n".join(source_lines)
-        await cl.Message(content=sources_text, author=AUTHOR).send()
+        sources_content = "\n\n".join(source_lines)
+        await cl.Message(
+            content="",
+            author=AUTHOR,
+            elements=[
+                cl.Text(
+                    name="📎 View Sources",
+                    content=sources_content,
+                    display="side",
+                )
+            ],
+        ).send()
 
     # ------------------------------------------------------------------
     # Render the Plotly chart (if generated)
@@ -151,7 +186,7 @@ async def main(message: cl.Message):
         try:
             fig = pio.from_json(chart_data)
             await cl.Message(
-                content="",
+                content="📊 Interactive Chart",
                 author=AUTHOR,
                 elements=[cl.Plotly(name="Stock Chart", figure=fig, display="inline")],
             ).send()
