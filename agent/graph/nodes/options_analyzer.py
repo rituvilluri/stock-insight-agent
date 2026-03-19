@@ -69,7 +69,7 @@ def _black_scholes_greeks(
     Returns dict with keys delta, gamma, theta, vega (all floats).
     Returns None values if inputs are invalid (T=0, sigma=0, etc.).
     """
-    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0 or math.isnan(sigma) or math.isnan(S):
         return {"delta": None, "gamma": None, "theta": None, "vega": None}
     sqrt_T = math.sqrt(T)
 

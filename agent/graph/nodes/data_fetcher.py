@@ -365,7 +365,7 @@ async def fetch_price_data(state: AgentState) -> AgentState:
     Async wrapper: runs the sync I/O work in a thread executor so it does
     not block LangGraph's async event loop.
     """
-    loop = asyncio.get_event_loop()
+    loop = asyncio.get_running_loop()
     return await loop.run_in_executor(None, _fetch_price_data_sync, state)
 
 
