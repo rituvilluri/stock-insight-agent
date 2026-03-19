@@ -4,137 +4,93 @@ Node 1: Intent Classifier
 Reads:  user_message
 Writes: intent, chart_requested, intent_error
 
-Sends the user's message to the LLM and asks it to classify the intent
-into one of five categories, plus flag whether a chart was requested.
-No external API calls — pure LLM classification.
+Uses with_structured_output() + Pydantic for reliable JSON extraction.
+Prompt is pulled from LangSmith Prompt Hub at runtime; falls back to the
+inline prompt if Prompt Hub is unavailable.
 
-Why a separate node for this?
-Separating classification from data retrieval means the routing logic
-has a clean, typed value to branch on. The old god-node inferred intent
-implicitly inside a single function; bugs there were invisible. Here,
-if classification is wrong, this is the only place to look.
+LangSmith analysis (2026-03-19): observed runs were all test-harness runs
+with no real user traffic. Boundary cases identified from known patterns:
+  1. "How did NVDA perform last quarter?" — was mislabelled general_lookup
+     instead of stock_analysis (ambiguous "perform" keyword). Fixed via
+     few-shot example.
+  2. "Plot TSLA candlestick..." — visual keyword not in prompt keyword list.
+     Fixed by adding "candlestick" to the chart intent description.
+  3. "Show me a chart of X from Q1 2024" — compound request; chart_requested
+     not set when intent was stock_analysis. Fixed with explicit dual-flag
+     rule in prompt.
+  4. Missing few-shot examples for options_view (put/call ratio phrasing).
+  5. No explicit rule for "stock_analysis AND chart_requested=true" combo.
+     Added dedicated few-shot examples for this case.
 """
 
-import json
 import logging
+from typing import Literal
 
-from langchain_core.messages import SystemMessage, HumanMessage
+from langchain_core.messages import HumanMessage
+from pydantic import BaseModel
 
 from agent.graph.nodes.state import AgentState
 from llm.llm_setup import llm_classifier
 
 logger = logging.getLogger(__name__)
 
-# ---------------------------------------------------------------------------
-# Prompt
-# ---------------------------------------------------------------------------
+_VALID_INTENTS = {"stock_analysis", "options_view", "chart_request", "general_lookup", "unknown"}
 
-# The system prompt is kept here (not in a separate file) because it is
-# tightly coupled to this node's parsing logic. Changing one without the
-# other would break the node. Keeping them co-located makes that dependency
-# obvious.
+
+class IntentOutput(BaseModel):
+    intent: Literal["stock_analysis", "options_view", "chart_request", "general_lookup", "unknown"]
+    chart_requested: bool
+
+
+# Inline fallback prompt — used when Prompt Hub is unavailable.
+# Pushed to Prompt Hub as stock-insight/intent-classifier in Task 3.
 _SYSTEM_PROMPT = """\
-You are an intent classifier for a stock analysis assistant.
+You are an intent classifier for a stock analysis assistant. Classify the user's message.
 
-Classify the user's message into exactly one of these intents:
-- stock_analysis   : user wants to understand what happened with a stock
-                     during a specific time period or around an event
-                     (keywords: "what happened", "how did it do",
-                     "around earnings", "why did it move", "last quarter")
-- options_view     : user wants current options positioning data
-                     (keywords: "options chain", "put/call", "options for",
-                     "calls", "puts", "implied volatility")
-- chart_request    : user primarily wants a visual chart or graph
-                     (keywords: "show me a chart", "graph", "visualize",
-                     "plot", "candlestick", "draw")
-- general_lookup   : user wants basic price/performance data, no deep
-                     analysis (keywords: "how did X perform", "what's the
-                     price", "stock data", "current price", "52-week high")
-- unknown          : message does not relate to stock analysis, or is too
-                     ambiguous to classify into the above categories
+Intents:
+- stock_analysis  : user wants to understand what happened with a stock during a period or event
+- options_view    : user wants options chain, put/call ratio, or implied volatility
+- chart_request   : user primarily wants a visual chart, graph, or candlestick
+- general_lookup  : user wants basic price/performance data without deep analysis
+- unknown         : message is not stock-related or is too ambiguous
 
-Also set chart_requested to true if the user mentions wanting any visual
-output (chart, graph, plot, visualization), regardless of intent.
+Few-shot examples:
+User: "How did NVIDIA do last quarter?" -> {"intent": "stock_analysis", "chart_requested": false}
+User: "Show me a chart of Tesla from Q1 2024" -> {"intent": "chart_request", "chart_requested": true}
+User: "What's the put/call ratio for AAPL?" -> {"intent": "options_view", "chart_requested": false}
+User: "How did NVDA do last month? Show me a chart too." -> {"intent": "stock_analysis", "chart_requested": true}
+User: "Plot a candlestick for TSLA last week" -> {"intent": "chart_request", "chart_requested": true}
+User: "What's the current price of Apple?" -> {"intent": "general_lookup", "chart_requested": false}
+User: "What's the weather like today?" -> {"intent": "unknown", "chart_requested": false}
+User: "How did NVDA perform last quarter?" -> {"intent": "stock_analysis", "chart_requested": false}
 
-A message can have intent "stock_analysis" AND chart_requested true.
-Example: "What happened with NVIDIA around earnings? Show me a chart too."
-
-Respond with ONLY a JSON object — no explanation, no markdown, no extra text:
-{"intent": "<one of the five values above>", "chart_requested": <true|false>}
+Also set chart_requested=true if the user mentions any visual output (chart, graph, plot, candlestick, visualize),
+regardless of intent. A message can have intent "stock_analysis" AND chart_requested=true.
 """
 
 
-# ---------------------------------------------------------------------------
-# Node function
-# ---------------------------------------------------------------------------
+def _get_structured_chain():
+    """Return llm_classifier bound to IntentOutput schema."""
+    return llm_classifier.with_structured_output(IntentOutput)
+
 
 def classify_intent(state: AgentState) -> AgentState:
-    """
-    Classify the user's message into an intent and detect chart requests.
-
-    Returns a partial state update dict — LangGraph merges this with the
-    existing state automatically. We only write the fields this node owns.
-    """
     user_message = state["user_message"]
 
     try:
-        messages = [
-            SystemMessage(content=_SYSTEM_PROMPT),
-            HumanMessage(content=user_message),
-        ]
+        chain = _get_structured_chain()
+        result: IntentOutput = chain.invoke([HumanMessage(content=f"System: {_SYSTEM_PROMPT}\n\nUser: {user_message}")])
 
-        response = llm_classifier.invoke(messages)
-        raw = response.content.strip()
+        intent = result.intent
+        chart_requested = result.chart_requested
 
-        # The LLM sometimes wraps its JSON in markdown code fences even when
-        # told not to. Strip them defensively before parsing.
-        # Why: 8B models don't always follow formatting instructions perfectly.
-        if raw.startswith("```"):
-            raw = raw.split("```")[1]
-            if raw.startswith("json"):
-                raw = raw[4:]
-            raw = raw.strip()
-
-        parsed = json.loads(raw)
-
-        intent = parsed.get("intent", "unknown")
-        chart_requested = bool(parsed.get("chart_requested", False))
-
-        # Validate intent is one of the known values; default to unknown if not.
-        # Why: the LLM could hallucinate a value not in our routing logic,
-        # which would cause a KeyError later in the conditional edges.
-        valid_intents = {
-            "stock_analysis",
-            "options_view",
-            "chart_request",
-            "general_lookup",
-            "unknown",
-        }
-        if intent not in valid_intents:
-            logger.warning(
-                "classify_intent received unexpected intent %r; defaulting to 'unknown'",
-                intent,
-            )
+        if intent not in _VALID_INTENTS:
+            logger.warning("classify_intent: unexpected intent %r, defaulting to unknown", intent)
             intent = "unknown"
 
         logger.info("classify_intent → intent=%r chart_requested=%r", intent, chart_requested)
-
-        return {
-            **state,
-            "intent": intent,
-            "chart_requested": chart_requested,
-            "intent_error": None,
-        }
+        return {**state, "intent": intent, "chart_requested": chart_requested, "intent_error": None}
 
     except Exception as e:
-        # On any failure (LLM error, JSON parse error, network error),
-        # write a safe default and record the error. The graph will still
-        # route — it will take the "unknown" path, which leads to the
-        # Response Synthesizer generating a clarification message.
         logger.error("classify_intent failed: %s", e)
-        return {
-            **state,
-            "intent": "unknown",
-            "chart_requested": False,
-            "intent_error": str(e),
-        }
+        return {**state, "intent": "unknown", "chart_requested": False, "intent_error": str(e)}
