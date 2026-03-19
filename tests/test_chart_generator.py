@@ -272,3 +272,42 @@ def test_generate_chart_reads_date_context_for_title():
     assert result["chart_error"] is None
     parsed = _parse_chart_json(result["chart_data"])
     assert "Q2 2024 earnings" in parsed["layout"]["title"]["text"]
+
+
+# ---------------------------------------------------------------------------
+# Edge case tests — Plotly 6.x verification and SMA fallback
+# ---------------------------------------------------------------------------
+
+def test_sma_fallback_when_fewer_than_20_points():
+    """Chart must still render when daily_prices has < 20 points (no SMA line)."""
+    price_data = {
+        "ticker": "NVDA",
+        "start_date": "2025-12-28",
+        "end_date": "2025-12-31",
+        "daily_prices": [
+            {"date": f"2025-12-{28+i}", "open": 100, "high": 110, "low": 90, "close": 105, "volume": 1_000_000}
+            for i in range(3)
+        ],
+    }
+    state = {"ticker": "NVDA", "price_data": price_data, "chart_requested": True}
+    result = generate_chart(state)
+    assert result.get("chart_error") is None
+    assert result.get("chart_data") is not None
+
+
+def test_chart_returns_valid_json():
+    """chart_data must be valid JSON parseable by plotly.io.from_json."""
+    import plotly.io as pio
+    price_data = {
+        "ticker": "NVDA",
+        "start_date": "2025-01-01",
+        "end_date": "2025-01-31",
+        "daily_prices": [
+            {"date": f"2025-01-{i+1:02d}", "open": 100, "high": 110, "low": 90, "close": 105, "volume": 1_000_000}
+            for i in range(25)
+        ],
+    }
+    state = {"ticker": "NVDA", "price_data": price_data, "chart_requested": True}
+    result = generate_chart(state)
+    fig = pio.from_json(result["chart_data"])
+    assert fig is not None
