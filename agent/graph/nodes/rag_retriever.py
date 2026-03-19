@@ -44,6 +44,7 @@ except ImportError:
     genai_types = None  # type: ignore[assignment]
     _GENAI_AVAILABLE = False
 import requests
+from langsmith import traceable
 
 from agent.graph.nodes.state import AgentState
 
@@ -54,8 +55,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "data/vector_store")
-COLLECTION_NAME = "sec_filings_gemini_text_embedding_004"
-EMBEDDING_MODEL = "models/text-embedding-004"
+COLLECTION_NAME = "sec_filings_gemini_embedding_001"
+EMBEDDING_MODEL = "models/gemini-embedding-001"
 EDGAR_BASE = "https://data.sec.gov"
 EDGAR_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik}.json"
 EDGAR_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -317,6 +318,7 @@ def _discover_filings(cik: str, ticker: str, start_date: str, end_date: str) -> 
     return results
 
 
+@traceable(name="rag:edgar-download")
 def _download_filing(cik: str, accession_no: str, primary_doc: str) -> Optional[str]:
     """Download a filing document from EDGAR and return clean plain text."""
     # EDGAR Archive URLs use the accession number WITHOUT dashes in the path segment.
@@ -342,6 +344,7 @@ def _get_collection() -> chromadb.Collection:
     )
 
 
+@traceable(name="rag:ingest-filing")
 def _ingest_filing(collection: chromadb.Collection, filing: dict, ticker: str) -> int:
     """
     Download, chunk, embed, and store a single filing.
@@ -377,6 +380,7 @@ def _ingest_filing(collection: chromadb.Collection, filing: dict, ticker: str) -
     return len(new_chunks)
 
 
+@traceable(name="rag:query-chromadb")
 def _query_collection(
     collection: chromadb.Collection,
     ticker: str,
@@ -481,6 +485,11 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
         logger.info(
             "retrieve_rag_context: ingested %d new chunks, retrieved %d for %s",
             total_new, len(chunks), ticker,
+        )
+        logger.info(
+            "rag_retriever metadata — chunks_retrieved=%d filing_periods=%s",
+            len(chunks),
+            [f["period"] for f in filings] if filings else [],
         )
         return {"filing_chunks": chunks, "filing_ingested": total_new > 0, "filing_error": None}
 
