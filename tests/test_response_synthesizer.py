@@ -282,3 +282,64 @@ def test_node_preserves_existing_state_fields(mock_llm):
     assert result["chart_requested"] is True
     assert result["ticker"] == "NVDA"
     assert result["company_name"] == "NVIDIA"
+
+
+# ---------------------------------------------------------------------------
+# Depth routing tests
+# ---------------------------------------------------------------------------
+
+@patch("agent.graph.nodes.response_synthesizer.llm_synthesizer")
+def test_quick_depth_uses_llm_synthesizer(mock_llm):
+    """response_depth='quick' must call llm_synthesizer, not the deep variant."""
+    mock_llm.invoke.return_value = MagicMock(content="Quick analysis result")
+    state = _make_state(response_depth="quick")
+    result = synthesize_response(state)
+    assert mock_llm.invoke.called
+    assert result["synthesizer_error"] is None
+
+
+@patch("agent.graph.nodes.response_synthesizer.llm_synthesizer_deep")
+def test_deep_depth_uses_llm_synthesizer_deep(mock_deep_llm):
+    """response_depth='deep' must call llm_synthesizer_deep."""
+    mock_deep_llm.invoke.return_value = MagicMock(content="Deep analysis result")
+    state = _make_state(response_depth="deep")
+    result = synthesize_response(state)
+    assert mock_deep_llm.invoke.called
+    assert result["synthesizer_error"] is None
+
+
+@patch("agent.graph.nodes.response_synthesizer.llm_synthesizer")
+def test_unknown_depth_defaults_to_quick(mock_llm):
+    """Any value other than 'deep' must fall back to quick path."""
+    mock_llm.invoke.return_value = MagicMock(content="Quick result")
+    state = _make_state(response_depth="invalid_value")
+    result = synthesize_response(state)
+    assert mock_llm.invoke.called
+    assert result["synthesizer_error"] is None
+
+
+@patch("agent.graph.nodes.response_synthesizer.llm_synthesizer")
+def test_missing_depth_defaults_to_quick(mock_llm):
+    """If response_depth is absent from state, default to quick path."""
+    mock_llm.invoke.return_value = MagicMock(content="Quick result")
+    state = _make_state()  # no response_depth key
+    state.pop("response_depth", None)
+    result = synthesize_response(state)
+    assert mock_llm.invoke.called
+
+
+def test_deep_prompt_contains_section_headers():
+    """Deep Dive prompt must contain the required markdown section headers."""
+    state = _make_state(response_depth="deep")
+    prompt = _build_synthesis_prompt(state)
+    for section in ["Price Action", "News & Catalysts", "Market Sentiment", "SEC Filings", "Options Activity"]:
+        assert section in prompt, f"Deep Dive prompt missing section: {section}"
+
+
+def test_grounding_instruction_in_prompt():
+    """Both quick and deep prompts must contain the grounding instruction."""
+    grounding = "do not fill gaps from your training knowledge"
+    for depth in ("quick", "deep"):
+        state = _make_state(response_depth=depth)
+        prompt = _build_synthesis_prompt(state)
+        assert grounding in prompt, f"Grounding instruction missing from {depth} prompt"
