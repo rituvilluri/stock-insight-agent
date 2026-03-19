@@ -61,12 +61,10 @@ async def chat_profiles():
         cl.ChatProfile(
             name="Quick Analysis",
             markdown_description="Concise summary with key price, news, and sentiment data.",
-            icon="⚡",
         ),
         cl.ChatProfile(
             name="Deep Dive",
             markdown_description="Comprehensive analyst brief with structured sections.",
-            icon="🔬",
         ),
     ]
 
