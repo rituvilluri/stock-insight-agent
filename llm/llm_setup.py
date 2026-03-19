@@ -28,6 +28,17 @@ llm_synthesizer = ChatGroq(
     streaming=True,
 )
 
+# Used by the Response Synthesizer on the Deep Dive path.
+# Same model as llm_synthesizer; higher token budget for structured briefs.
+# streaming=True is required — app.py streams tokens via on_chat_model_stream events.
+llm_synthesizer_deep = ChatGroq(
+    model="llama-3.3-70b-versatile",
+    temperature=0.3,
+    max_tokens=2048,
+    groq_api_key=_groq_key,
+    streaming=True,
+)
+
 # Legacy alias kept so the existing tool_caller.py and app.py don't break
 # while the Phase 1 rebuild is in progress. Remove once workflow.py is rebuilt.
 llm = llm_classifier
