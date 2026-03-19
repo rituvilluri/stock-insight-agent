@@ -22,6 +22,7 @@ is central to this product. The LLM is reserved for genuinely hard cases
 like "during the COVID crash" or "when tariffs were announced".
 """
 
+import calendar as _calendar
 import json
 import logging
 import re
@@ -51,6 +52,15 @@ _QUARTER_MONTHS: dict[int, tuple[int, int]] = {
     3: (7, 9),
     4: (10, 12),
 }
+
+def _quarter_boundaries(quarter: int, year: int) -> tuple[str, str]:
+    """Return (start_date_iso, end_date_iso) for a calendar quarter."""
+    start_month, end_month = _QUARTER_MONTHS[quarter]
+    last_day = _calendar.monthrange(year, end_month)[1]
+    start = datetime(year, start_month, 1).strftime("%Y-%m-%d")
+    end = datetime(year, end_month, last_day).strftime("%Y-%m-%d")
+    return start, end
+
 
 # Phrases that signal the user also wants current market data alongside
 # whatever historical period they asked about.
@@ -109,6 +119,14 @@ def _parse_simple_range(message: str) -> tuple[str, str, str] | None:
     # Patterns are ordered from most-specific to least-specific to avoid
     # "last month" matching before "last 3 months".
     patterns = [
+        # "Q4 2025", "Q1 2024", "Q3 of 2022" — calendar quarter boundaries
+        # Must come FIRST to intercept before Layer 3 LLM.
+        (
+            re.compile(r"\bQ([1-4])\s+(?:of\s+)?(20\d{2})\b", re.IGNORECASE),
+            lambda m: _quarter_boundaries(int(m.group(1)), int(m.group(2))) + (
+                f"Q{m.group(1)} {m.group(2)}",
+            ),
+        ),
         # "last N days" / "past N days"
         (
             re.compile(r"(?:last|past)\s+(\d+)\s+days?", re.IGNORECASE),

@@ -211,6 +211,8 @@ def test_node_earnings_range_correct_window(mock_ticker_class):
     """
     Earnings date found in yfinance → 14 days before + 7 days after window.
     NVDA Q2 2024 earnings were approximately 2024-05-22.
+    Use short-year format (Q2 '24) so the Q{N} YYYY Layer 1 regex does NOT
+    intercept this message; Layer 2 earnings lookup must handle it.
     """
     earnings_date = pd.Timestamp("2024-05-22", tz="America/New_York")
     mock_df = pd.DataFrame({"EPS Estimate": [5.59]}, index=[earnings_date])
@@ -220,7 +222,7 @@ def test_node_earnings_range_correct_window(mock_ticker_class):
     mock_ticker_class.return_value = mock_instance
 
     result = parse_dates(
-        _make_state("What happened around Q2 2024 earnings?", ticker="NVDA")
+        _make_state("What happened around Q2 '24 earnings?", ticker="NVDA")
     )
 
     assert result["date_missing"] is False
@@ -236,6 +238,8 @@ def test_node_earnings_yfinance_failure_falls_through_to_llm(mock_llm, mock_tick
     """
     If yfinance fails to return an earnings date, the node should fall
     through to Layer 3 (LLM) rather than setting date_missing.
+    Use short-year format (Q2 '24) so the Q{N} YYYY Layer 1 regex does NOT
+    intercept this message.
     """
     mock_instance = MagicMock()
     mock_instance.earnings_dates = pd.DataFrame()  # empty — no data
@@ -247,7 +251,7 @@ def test_node_earnings_yfinance_failure_falls_through_to_llm(mock_llm, mock_tick
     )
 
     result = parse_dates(
-        _make_state("What happened around Q2 2024 earnings?", ticker="NVDA")
+        _make_state("What happened around Q2 '24 earnings?", ticker="NVDA")
     )
 
     assert result["date_missing"] is False
@@ -324,3 +328,28 @@ def test_node_preserves_existing_state_fields():
     assert result["company_name"] == "NVIDIA"
     assert result["chart_requested"] is False
     assert result["ticker"] == "NVDA"
+
+
+# ---------------------------------------------------------------------------
+# Task 1: Q{N} [of] YYYY Layer 1 regex
+# ---------------------------------------------------------------------------
+
+BASE_STATE = {"user_message": "", "user_config": {}, "ticker": "NVDA"}
+
+@pytest.mark.parametrize("message,expected_start,expected_end,description", [
+    ("Tell me how Nvidia did Q4 2025", "2025-10-01", "2025-12-31", "Q4 YYYY"),
+    ("How did TSLA do Q1 2024?", "2024-01-01", "2024-03-31", "Q1 YYYY"),
+    ("Q2 2023 performance of Apple", "2023-04-01", "2023-06-30", "Q2 YYYY at start"),
+    ("What happened in Q3 of 2022?", "2022-07-01", "2022-09-30", "Q3 of YYYY with 'of'"),
+    ("NVDA Q4 2024 earnings results", "2024-10-01", "2024-12-31", "Q4 YYYY with earnings keyword"),
+])
+def test_quarter_year_regex(message, expected_start, expected_end, description):
+    """Q{N} YYYY must resolve via Layer 1 regex, never reaching the LLM."""
+    state = {**BASE_STATE, "user_message": message}
+    with patch("agent.graph.nodes.date_parser.llm_classifier") as mock_llm:
+        mock_llm.invoke.side_effect = AssertionError("Layer 3 LLM was called — Layer 1 regex missed the pattern")
+        result = parse_dates(state)
+    assert result["start_date"] == expected_start, f"FAILED ({description}): start {result['start_date']} != {expected_start}"
+    assert result["end_date"] == expected_end, f"FAILED ({description}): end {result['end_date']} != {expected_end}"
+    assert result["date_missing"] is False
+    assert result["date_error"] is None
