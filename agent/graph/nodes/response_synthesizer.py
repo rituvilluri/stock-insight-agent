@@ -269,6 +269,7 @@ def _build_synthesis_prompt(state: AgentState) -> str:
     )
 
     if response_depth == "deep":
+        # Prompt Hub slug: synthesizer-deep (pushed as stock-insight/synthesizer-deep)
         prompt = (
             f"You are a stock analysis assistant. Generate a comprehensive analyst brief "
             f"for {company} ({ticker}) covering {date_context}.\n\n"
@@ -285,6 +286,7 @@ def _build_synthesis_prompt(state: AgentState) -> str:
             f"Generate the analyst brief now:"
         )
     else:
+        # Prompt Hub slug: synthesizer-quick (pushed as stock-insight/synthesizer-quick)
         # quick (default) — any value other than "deep" uses this path
         prompt = (
             f"You are a stock analysis assistant. Generate a concise, factual response "
