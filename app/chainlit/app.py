@@ -130,12 +130,10 @@ async def main(message: cl.Message):
                 if display_name:
                     step = cl.Step(name=display_name, type="run")
                     await step.__aenter__()
+                    # Note: __aenter__/__aexit__ are used instead of `async with`
+                    # because the step must span multiple loop iterations — it
+                    # opens on on_chain_start and closes on the later on_chain_end.
                     active_steps[node] = step
-
-            # Close the step card when the node completes.
-            elif kind == "on_chain_end" and node in active_steps:
-                step = active_steps.pop(node)
-                await step.__aexit__(None, None, None)
 
             # Stream tokens from the synthesizer's LLM call token-by-token.
             elif kind == "on_chat_model_stream" and node == "synthesize":
@@ -143,11 +141,17 @@ async def main(message: cl.Message):
                 if chunk.content:
                     await streaming_msg.stream_token(chunk.content)
 
-            # Collect state updates written by completed nodes.
+            # Collect state updates from completed nodes, then close any open step card.
+            # Both actions must run on the same on_chain_end event — using separate elif
+            # branches would cause the first branch to consume the event and drop state
+            # updates for nodes that also have step cards open.
             elif kind == "on_chain_end" and node:
                 output = event["data"].get("output", {})
                 if isinstance(output, dict):
                     final_state.update(output)
+                if node in active_steps:
+                    step = active_steps.pop(node)
+                    await step.__aexit__(None, None, None)
 
     except Exception as e:
         # Close any open steps on error.
