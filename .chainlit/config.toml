@@ -68,7 +68,7 @@ edit_message = true
 # Name of the assistant.
 name = "Stock Insight Agent"
 
-# default_theme = "dark"
+default_theme = "dark"
 
 # layout = "wide"
 
@@ -78,7 +78,7 @@ name = "Stock Insight Agent"
 description = "AI-powered stock analysis and insights"
 
 # Chain of Thought (CoT) display mode. Can be "hidden", "tool_call" or "full".
-cot = "full"
+cot = "hidden"
 
 # Custom avatar for the assistant
 # avatar = "/avatar.svg"

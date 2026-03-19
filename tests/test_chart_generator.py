@@ -88,15 +88,21 @@ def test_build_chart_has_candlestick_trace():
     assert "candlestick" in trace_types
 
 
-def test_build_chart_no_volume_subplot_when_not_anomalous():
+def test_build_chart_volume_always_shown():
     """
-    When volume_anomaly.is_anomalous is False, the figure should have
-    only a candlestick trace — no volume bars.
+    Volume subplot is now always shown regardless of anomaly status.
+    (Behavioral change from spec: previously only on anomaly detection.)
     """
+    # Not anomalous — volume still shown
     anomaly = {"is_anomalous": False, "anomaly_ratio": 1.1}
     fig = _build_chart("NVDA", _make_daily_prices(), volume_anomaly=anomaly)
     trace_types = [t.type for t in fig.data]
-    assert "bar" not in trace_types
+    assert "bar" in trace_types
+
+    # No anomaly object at all — volume still shown
+    fig2 = _build_chart("NVDA", _make_daily_prices(), volume_anomaly=None)
+    trace_types2 = [t.type for t in fig2.data]
+    assert "bar" in trace_types2
 
 
 def test_build_chart_volume_subplot_added_when_anomalous():
@@ -117,11 +123,16 @@ def test_build_chart_title_includes_ticker():
     assert "TSLA" in fig.layout.title.text
 
 
-def test_build_chart_title_flags_anomaly():
-    """When anomalous, the title should indicate unusual volume."""
+def test_build_chart_title_uses_ticker_only():
+    """
+    Title format is '{TICKER} — {date_context}'. Anomaly warning is no
+    longer appended to the title (volume is always shown now).
+    """
     anomaly = {"is_anomalous": True, "anomaly_ratio": 3.0}
     fig = _build_chart("GME", _make_daily_prices(), volume_anomaly=anomaly)
-    assert "volume" in fig.layout.title.text.lower() or "unusual" in fig.layout.title.text.lower()
+    assert "GME" in fig.layout.title.text
+    assert "unusual" not in fig.layout.title.text.lower()
+    assert "volume" not in fig.layout.title.text.lower()
 
 
 # ---------------------------------------------------------------------------
@@ -155,13 +166,20 @@ def test_node_volume_subplot_present_in_json_when_anomalous():
     assert "bar" in trace_types
 
 
-def test_node_no_volume_bar_in_json_when_not_anomalous():
-    """When not anomalous, bar trace must not appear in the serialised figure."""
-    anomaly = {"is_anomalous": False, "anomaly_ratio": 1.1}
-    result = generate_chart(_make_state(volume_anomaly=anomaly))
+def test_node_volume_bar_always_present_in_json():
+    """Volume bar trace must appear in serialised JSON for all queries."""
+    # With no anomaly
+    result = generate_chart(_make_state(volume_anomaly=None))
     parsed = _parse_chart_json(result["chart_data"])
     trace_types = [t.get("type") for t in parsed["data"]]
-    assert "bar" not in trace_types
+    assert "bar" in trace_types
+
+    # With non-anomalous
+    anomaly = {"is_anomalous": False, "anomaly_ratio": 1.1}
+    result2 = generate_chart(_make_state(volume_anomaly=anomaly))
+    parsed2 = _parse_chart_json(result2["chart_data"])
+    trace_types2 = [t.get("type") for t in parsed2["data"]]
+    assert "bar" in trace_types2
 
 
 def test_node_price_data_none_sets_chart_data_none():
@@ -217,3 +235,40 @@ def test_node_preserves_existing_state_fields():
     assert result["date_context"] == "last month"
     assert result["response_text"] == "Here is the analysis..."
     assert result["chart_requested"] is True
+
+
+def test_build_chart_sma_trace_present_with_enough_data():
+    """20-day SMA line must appear when daily_prices has >= 20 candles."""
+    fig = _build_chart("NVDA", _make_daily_prices(n=25), volume_anomaly=None)
+    trace_names = [t.name for t in fig.data]
+    assert "20d SMA" in trace_names
+
+
+def test_build_chart_sma_absent_with_fewer_than_20_candles():
+    """SMA must be omitted when daily_prices has < 20 candles."""
+    fig = _build_chart("NVDA", _make_daily_prices(n=10), volume_anomaly=None)
+    trace_names = [t.name for t in fig.data]
+    assert "20d SMA" not in trace_names
+
+
+def test_build_chart_dark_background():
+    """Chart background must match the UI dark theme (#0f1117)."""
+    fig = _build_chart("NVDA", _make_daily_prices(), volume_anomaly=None)
+    assert fig.layout.plot_bgcolor == "#0f1117"
+    assert fig.layout.paper_bgcolor == "#0f1117"
+
+
+def test_build_chart_green_up_candles():
+    """Up candle color must be the UI green accent #00c896."""
+    fig = _build_chart("NVDA", _make_daily_prices(), volume_anomaly=None)
+    candle_trace = next(t for t in fig.data if t.type == "candlestick")
+    assert candle_trace.increasing.line.color == "#00c896"
+
+
+def test_generate_chart_reads_date_context_for_title():
+    """Chart title must use date_context from state when available."""
+    state = _make_state(date_context="Q2 2024 earnings")
+    result = generate_chart(state)
+    assert result["chart_error"] is None
+    parsed = _parse_chart_json(result["chart_data"])
+    assert "Q2 2024 earnings" in parsed["layout"]["title"]["text"]

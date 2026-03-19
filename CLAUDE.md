@@ -2,6 +2,10 @@
 
 This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
 
+## Collaboration Style
+- User is learning Claude Code best practices. When a more optimal tool, workflow, or approach is available, suggest it proactively with a brief explanation of why.
+- After any meaningful implementation, prompt the user to update docs/TDD.md, docs/PRD.md, or docs/DecisionLog.md where relevant. "Meaningful" means: new node, changed routing logic, new state fields, new external dependency, architectural trade-off made, or scope change. Do not prompt for minor bug fixes or styling changes.
+
 ## Project
 AI-powered stock analysis agent. Portfolio project targeting AI engineering and AI PM roles.
 Single-agent LangGraph architecture. NOT multi-agent.

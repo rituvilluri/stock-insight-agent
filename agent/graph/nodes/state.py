@@ -294,3 +294,14 @@ class AgentState(TypedDict, total=False):
 
     synthesizer_error: Optional[str]
     # Written by Node 9 if response generation fails. None on success.
+
+    # -------------------------------------------------------------------------
+    # Chat profile — set by app.py from the Chainlit chat profile selection
+    # -------------------------------------------------------------------------
+
+    response_depth: str
+    # "quick" or "deep". Controls synthesizer prompt style and token budget.
+    # "quick" → current concise prompt, max_tokens=1024 (default)
+    # "deep"  → structured analyst brief, max_tokens=2048
+    # Not marked Required — nodes use state.get("response_depth", "quick").
+    # Set by app.py before the graph starts running.

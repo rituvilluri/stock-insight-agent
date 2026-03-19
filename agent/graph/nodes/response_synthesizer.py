@@ -38,7 +38,7 @@ import logging
 from typing import Optional
 
 from agent.graph.nodes.state import AgentState
-from llm.llm_setup import llm_synthesizer
+from llm.llm_setup import llm_synthesizer, llm_synthesizer_deep
 
 
 def _fmt_volume(vol) -> str:
@@ -109,6 +109,7 @@ def _build_synthesis_prompt(state: AgentState) -> str:
     date_context = state.get("date_context", "the requested period")
     intent = state.get("intent", "stock_analysis")
     include_snapshot = state.get("include_current_snapshot", False)
+    response_depth = state.get("response_depth", "quick")
 
     sections = []
 
@@ -250,18 +251,56 @@ def _build_synthesis_prompt(state: AgentState) -> str:
         "If any data dimension shows 'Unavailable', explicitly state this in the response."
     )
 
-    prompt = (
-        f"You are a stock analysis assistant. Generate a concise, factual response "
-        f"about {company} ({ticker}) for {date_context}.\n\n"
-        f"Rules:\n"
-        f"- Reference specific data points (prices, percentages, dates) from the data below\n"
-        f"- Cite the source for every factual claim\n"
-        f"- Do not generate any claim not supported by the provided data\n"
-        f"- {structure_instruction}"
-        f"{snapshot_instruction}\n\n"
-        f"--- DATA ---\n{data_block}\n--- END DATA ---\n\n"
-        f"Generate the analysis response now:"
+    grounding_instruction = (
+        "Only reference dates, prices, and events that appear in the DATA block below. "
+        "If a fact is not in the data, say it is unavailable — do not fill gaps from "
+        "your training knowledge."
     )
+
+    strict_grounding_rules = (
+        "CRITICAL GROUNDING RULES:\n"
+        "- Only state facts that appear explicitly in the DATA block above.\n"
+        "- Do NOT add context, background, or facts from your training data.\n"
+        "- Do NOT mention events, earnings, products, or news not in the DATA block.\n"
+        "- If a data field is None or missing, say \"data unavailable\" for that point.\n"
+        "- Every specific claim (price, %, date, analyst target) must come from the DATA block.\n"
+        "- ❌ Do NOT say things like \"NVIDIA has been a major beneficiary of AI demand\" (not in DATA block)\n"
+        "- ✅ DO say \"NVIDIA rose 5.2% over the period\" (directly from price_data)"
+    )
+
+    if response_depth == "deep":
+        # Prompt Hub slug: synthesizer-deep (pushed as stock-insight/synthesizer-deep)
+        prompt = (
+            f"You are a stock analysis assistant. Generate a comprehensive analyst brief "
+            f"for {company} ({ticker}) covering {date_context}.\n\n"
+            f"Rules:\n"
+            f"- {grounding_instruction}\n"
+            f"- Reference specific data points (prices, percentages, dates) from the data below\n"
+            f"- If a section's data is unavailable, state this explicitly under that heading\n"
+            f"\n{strict_grounding_rules}\n"
+            f"{snapshot_instruction}\n\n"
+            f"Structure your response with these exact markdown sections:\n"
+            f"## Price Action\n## News & Catalysts\n## Market Sentiment\n"
+            f"## SEC Filings\n## Options Activity\n\n"
+            f"--- DATA ---\n{data_block}\n--- END DATA ---\n\n"
+            f"Generate the analyst brief now:"
+        )
+    else:
+        # Prompt Hub slug: synthesizer-quick (pushed as stock-insight/synthesizer-quick)
+        # quick (default) — any value other than "deep" uses this path
+        prompt = (
+            f"You are a stock analysis assistant. Generate a concise, factual response "
+            f"about {company} ({ticker}) for {date_context}.\n\n"
+            f"Rules:\n"
+            f"- {grounding_instruction}\n"
+            f"- Reference specific data points (prices, percentages, dates) from the data below\n"
+            f"- Cite the source for every factual claim\n"
+            f"- {structure_instruction}\n"
+            f"\n{strict_grounding_rules}"
+            f"{snapshot_instruction}\n\n"
+            f"--- DATA ---\n{data_block}\n--- END DATA ---\n\n"
+            f"Generate the analysis response now:"
+        )
 
     return prompt
 
@@ -312,7 +351,7 @@ def _build_sources_cited(state: AgentState) -> list:
 # Node function
 # ---------------------------------------------------------------------------
 
-def synthesize_response(state: AgentState) -> AgentState:
+async def synthesize_response(state: AgentState) -> AgentState:
     """
     Generate the final natural-language response from all data in state.
     Writes response_text and sources_cited on success.
@@ -342,7 +381,9 @@ def synthesize_response(state: AgentState) -> AgentState:
     # ------------------------------------------------------------------
     try:
         prompt = _build_synthesis_prompt(state)
-        response = llm_synthesizer.invoke(prompt)
+        response_depth = state.get("response_depth", "quick")
+        llm = llm_synthesizer_deep if response_depth == "deep" else llm_synthesizer
+        response = await llm.ainvoke(prompt)
         response_text = response.content if hasattr(response, "content") else str(response)
 
         sources_cited = _build_sources_cited(state)

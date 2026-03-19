@@ -1,5 +1,5 @@
 """
-LangGraph workflow for the Stock Insight Agent — Phase 2 + Node 8 (Options).
+LangGraph workflow for the Stock Insight Agent — Phase 2 + Nodes 7 and 8.
 
 Nodes wired:
   1  Intent Classifier    — classify_intent
@@ -7,13 +7,11 @@ Nodes wired:
   3  Date Parser          — parse_dates
   4  Price Data Fetcher   — fetch_price_data
   5  News Retriever       — retrieve_news      ─┐ parallel via Send()
-  6  Reddit Sentiment     — reddit_sentiment   ─┘
+  6  Reddit Sentiment     — reddit_sentiment    ├─ parallel
+  7  RAG Retriever        — retrieve_rag        ─┘
   8  Options Analyzer     — analyze_options
   9  Response Synthesizer — synthesize_response
   10 Chart Generator      — generate_chart
-
-Nodes deferred (stub, path routes around it):
-  7  RAG Retriever
 
 Routing overview:
   Node 1 → Node 2 → Node 3 → route_after_date_parser
@@ -23,8 +21,10 @@ Routing overview:
 
   route_after_fetch_price
     intent="chart_request"            → generate_chart → END
-    all other intents                 → Send(retrieve_news) + Send(reddit_sentiment)
-                                        [parallel fan-out; both converge at synthesize]
+    all other intents                 → Send(retrieve_news)
+                                        + Send(reddit_sentiment)
+                                        + Send(retrieve_rag)
+                                        [parallel fan-out; all three converge at synthesize]
 
   route_after_synthesizer
     chart_requested=True              → generate_chart → END
@@ -56,6 +56,7 @@ from agent.graph.nodes.data_fetcher import fetch_price_data
 from agent.graph.nodes.news_retriever import retrieve_news
 from agent.graph.nodes.reddit_sentiment import analyze_reddit_sentiment
 from agent.graph.nodes.options_analyzer import analyze_options
+from agent.graph.nodes.rag_retriever import retrieve_rag_context
 from agent.graph.nodes.response_synthesizer import synthesize_response
 from agent.graph.nodes.chart_generator import generate_chart
 
@@ -113,10 +114,14 @@ def route_after_fetch_price(state: AgentState):
         logger.debug("route_after_fetch_price → generate_chart (chart_request intent)")
         return "generate_chart"
 
-    logger.debug("route_after_fetch_price → Send(retrieve_news) + Send(reddit_sentiment) (intent=%s)", intent)
+    logger.debug(
+        "route_after_fetch_price → Send(retrieve_news) + Send(reddit_sentiment) + Send(retrieve_rag) (intent=%s)",
+        intent,
+    )
     return [
         Send("retrieve_news", state),
         Send("reddit_sentiment", state),
+        Send("retrieve_rag", state),
     ]
 
 
@@ -164,6 +169,7 @@ def create_workflow():
     graph.add_node("retrieve_news",      retrieve_news)
     graph.add_node("reddit_sentiment",   analyze_reddit_sentiment)
     graph.add_node("analyze_options",    analyze_options)
+    graph.add_node("retrieve_rag",       retrieve_rag_context)
     graph.add_node("synthesize",         synthesize_response)
     graph.add_node("generate_chart",     generate_chart)
 
@@ -197,19 +203,20 @@ def create_workflow():
     graph.add_edge("analyze_options", "synthesize")
 
     # After Node 4: fan-out or direct chart for chart_request
-    # Returns [Send("retrieve_news"), Send("reddit_sentiment")] for analysis intents,
-    # or "generate_chart" string for chart_request intent.
+    # Returns [Send("retrieve_news"), Send("reddit_sentiment"), Send("retrieve_rag")]
+    # for analysis intents, or "generate_chart" for chart_request intent.
     graph.add_conditional_edges(
         "fetch_price",
         route_after_fetch_price,
-        ["retrieve_news", "reddit_sentiment", "generate_chart"],
+        ["retrieve_news", "reddit_sentiment", "retrieve_rag", "generate_chart"],
     )
 
-    # Nodes 5 and 6 run in parallel (dispatched via Send above).
-    # Both converge at synthesize — LangGraph waits for both superstep
+    # Nodes 5, 6, 7 run in parallel (dispatched via Send above).
+    # All three converge at synthesize — LangGraph waits for all superstep
     # branches to complete before advancing.
     graph.add_edge("retrieve_news",    "synthesize")
     graph.add_edge("reddit_sentiment", "synthesize")
+    graph.add_edge("retrieve_rag",     "synthesize")
 
     # After Node 9: optionally generate chart
     graph.add_conditional_edges(
@@ -228,7 +235,7 @@ def create_workflow():
     # Compile
     # ------------------------------------------------------------------
     compiled = graph.compile()
-    logger.info("Stock Insight Agent workflow compiled (Phase 2 + Node 8 Options)")
+    logger.info("Stock Insight Agent workflow compiled (Phase 2 + Nodes 7 RAG + 8 Options)")
     return compiled
 
 

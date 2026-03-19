@@ -6,7 +6,7 @@
 
 **Status:** In Progress 
 
-**Last Updated:** February 27, 2026 
+**Last Updated:** March 19, 2026
 
 **Version:** 1.0
 
@@ -129,6 +129,13 @@ StockInsightState:
       Example: {"openai_key": "sk-...", "newsapi_key": "abc123"}
       Empty dict if no keys provided.
       Read by: Any node that calls an external API
+
+  response_depth: str
+      Chat profile selected by the user. Either "quick" or "deep".
+      "quick" (default): concise summary, llm_synthesizer (max_tokens=1024)
+      "deep": structured analyst brief with markdown sections, llm_synthesizer_deep (max_tokens=2048)
+      Not Required — nodes use state.get("response_depth", "quick") as fallback.
+      Read by: Node 9
 
   # --- Set by Node 1: Intent Classifier ---
   intent: str
@@ -282,11 +289,19 @@ StockInsightState:
       title, url or reference
       Read by: Chainlit (to display as clickable links below response)
 
+  synthesizer_error: str or None
+      Error message if synthesis failed. None if successful.
+      Read by: Chainlit (to display fallback message)
+
   # --- Set by Node 10: Chart Generator ---
   chart_data: str or None
       Plotly JSON payload for inline chart rendering.
       None if no chart was generated.
       Read by: Chainlit (to render Plotly chart)
+
+  chart_error: str or None
+      Error message if chart generation failed. None if successful.
+      Read by: Chainlit (to display fallback message)
 ```
 
 ### Design Notes
@@ -399,6 +414,8 @@ If no results exist and the date range overlaps with an earnings period, trigger
 
 Full ingestion workflow documented in Section 6: RAG Pipeline Design.
 
+**Parallel fan-out contract:** Node 7 executes in parallel with Nodes 5 and 6 via LangGraph `Send()`. All three nodes must return **only their owned fields** — never `{**state, ...}`. Returning shared fields (e.g., `user_message`, `ticker`) causes `InvalidUpdateError` when LangGraph merges the parallel branches at Node 9. Node 7 returns exactly: `{"filing_chunks": ..., "filing_ingested": ..., "filing_error": ...}`.
+
 ### Node 8: Options Analyzer
 
 **Reads:** `ticker`, `intent`, `include_current_snapshot`, `next_earnings_date`, `days_until_earnings` **Writes:** `options_data`, `options_error` **LLM call:** No **External API call:** Yes (yfinance)
@@ -417,29 +434,45 @@ For historical queries without the current snapshot flag, this node does not exe
 
 ### Node 9: Response Synthesizer
 
-**Reads:** All state fields from Nodes 1-8 **Writes:** `response_text`, `sources_cited` **LLM call:** Yes **External API call:** No
+**Reads:** All state fields from Nodes 1-8, `response_depth` **Writes:** `response_text`, `sources_cited`, `synthesizer_error` **LLM call:** Yes **External API call:** No
 
-Constructs a detailed prompt providing the LLM with all available data from state. The prompt includes these rules:
+Constructs a prompt providing the LLM with all available data from state and routes between two response modes based on `response_depth`.
 
+**Depth routing:**
+
+- `"quick"` (default — any value other than `"deep"`): concise summary using `llm_synthesizer` (`llama-3.1-8b-instant`, `max_tokens=1024`, `streaming=True`). Covers price action, key news, and sentiment in a single narrative paragraph.
+- `"deep"`: structured analyst brief using `llm_synthesizer_deep` (`llama-3.3-70b-versatile`, `max_tokens=2048`, `streaming=True`). Output uses five markdown sections: `## Price Action`, `## News & Catalysts`, `## Market Sentiment`, `## SEC Filings`, `## Options Activity`. If a section's data is unavailable, the heading is still included with an explicit note.
+
+Both modes include a grounding instruction: *"Only reference dates, prices, and events that appear in the DATA block below. If a fact is not in the data, say it is unavailable — do not fill gaps from your training knowledge."* This prevents the LLM from substituting hallucinated dates or prices when data is absent.
+
+Both modes also apply these rules:
 - Reference specific data points from the provided state (prices, percentages, dates)
 - Cite the source for every factual claim (article title and source, Reddit subreddit, filing type and quarter)
 - If any data dimension has an error (check the error fields), explicitly state what was unavailable
-- Do not generate any factual claims not supported by the provided data
-- Structure the response: price action first, then contributing factors (news, sentiment, filings), then trading activity context
-- Use `date_context` and `company_name` for natural language framing
-- If `include_current_snapshot` is true, present historical and current sections distinctly without implying that historical patterns will repeat
+- Use `date_context` and `company_name` for natural language framing
+- If `include_current_snapshot` is true, present historical and current sections distinctly
 
-Also constructs `sources_cited` by extracting all referenced sources from the data for Chainlit to render as clickable links.
+Also constructs `sources_cited` by extracting all referenced sources from the data for Chainlit to render as clickable links.
 
-For `unknown` intent or `date_missing`, generates a clarification prompt asking the user for more information.
+For `unknown` intent or `date_missing`, generates a clarification prompt asking the user for more information.
 
 ### Node 10: Chart Generator
 
-**Reads:** `ticker`, `price_data` **Writes:** `chart_data` **LLM call:** No **External API call:** No
+**Reads:** `ticker`, `price_data`, `volume_anomaly`, `date_context` **Writes:** `chart_data`, `chart_error` **LLM call:** No **External API call:** No
 
-Generates a Plotly candlestick chart from the daily price data in state. If `volume_anomaly.is_anomalous` is true, adds a volume bar subplot below the candlestick chart to highlight the volume spike.
+Generates a TradingView-style Plotly chart from the daily price data in state.
 
-The chart is serialized to Plotly's JSON format and written to `chart_data`. Chainlit deserializes the JSON and renders it as an interactive chart in the browser.
+**Visual style:** Dark background (`#0f1117`), up candles `#00c896` (green), down candles `#ff4d6d` (red), matching the UI theme.
+
+**Volume subplot:** Always shown in the bottom 25% of the chart (row heights `[0.75, 0.25]`). Bar colors match candle direction at 40% opacity. This is unconditional — `volume_anomaly.is_anomalous` no longer controls volume visibility.
+
+**20-day SMA overlay:** Plotted as an amber line (`#f0b429`) when `daily_prices` has 20 or more data points. Omitted entirely when fewer than 20 data points exist.
+
+**Chart title:** `f"{ticker} — {date_context}"` using `date_context` from state.
+
+**Hover template:** Shows OHLC prices and humanized volume (e.g., `42.3M`) on mouse-over.
+
+The chart is serialized to Plotly's JSON format and written to `chart_data`. Chainlit deserializes the JSON and renders it as an interactive inline chart.
 
 ---
 
@@ -660,40 +693,43 @@ Each retrieval node validates data before writing to state. Price Data Fetcher c
 
 ## 9. UI Integration
 
+### Chat Profiles
+
+Two profiles are presented at session start: **Quick Analysis** and **Deep Dive**. The selected profile maps to `response_depth` in state:
+
+- "Quick Analysis" → `response_depth = "quick"` (default)
+- "Deep Dive" → `response_depth = "deep"`
+
+The welcome message adjusts to mention the active mode.
+
 ### Message Flow
 
-1. User types a message in Chainlit
-2. Chainlit's `on_message` handler creates the initial state with `user_message` and `user_config`
-3. State is passed to the compiled LangGraph workflow via `app.invoke(state)`
-4. The workflow executes all nodes according to the graph edges
-5. Final state is returned to Chainlit
-6. Chainlit reads output fields from state and renders the response
+1. User selects a chat profile and types a message in Chainlit
+2. Chainlit's `on_message` handler creates the initial state with `user_message`, `user_config`, `response_depth`, and any persisted context from the previous turn
+3. State is streamed through the compiled LangGraph workflow via `graph.astream_events(state, version="v2")`
+4. Synthesizer tokens are streamed token-by-token via `on_chat_model_stream` events as they arrive
+5. Completed node outputs are collected from `on_chain_end` events into `final_state`
+6. Chainlit reads output fields from `final_state` and renders sources and chart after streaming completes
 
 ### Rendering Logic
 
-**`response_text`:** Rendered as the main chat message from the agent.
+**`response_text` / streaming:** The synthesizer streams tokens directly into a `cl.Message` object. An initial `"Analyzing your query..."` placeholder is shown while the graph runs; `stream_token()` calls overwrite this content as tokens arrive.
 
-**`sources_cited`:** Rendered below the main response as clickable links. Each source shows its type (news article, Reddit post, SEC filing), title, and URL.
+**`sources_cited`:** Rendered as a collapsible side panel using `cl.Text(name="📎 View Sources", content=..., display="side")`. Each source shows its icon (📰 news, 💬 reddit, 📄 filing), title, and URL.
 
-**`chart_data`:** If present, the Plotly JSON is deserialized and rendered as an interactive chart inline with the response.
+**`chart_data`:** If present, the Plotly JSON is deserialized and rendered as an interactive inline chart. The message content is `"📊 Interactive Chart"` so the bubble is not blank.
 
-### Loading States
+### Context Persistence
 
-For long-running operations, Chainlit sends intermediate updates:
+After each turn, `ticker`, `company_name`, `start_date`, `end_date`, and `date_context` are saved to `cl.user_session`. These are injected into `initial_state` on the next turn so follow-up questions resolve correctly without re-parsing.
 
-- "Analyzing your request..."
-- "Retrieving price data for NVDA..."
-- "Processing Q2 2024 earnings filing for the first time, this may take a moment..."
+### Theme
 
-These keep the user informed and prevent the perception of the agent being frozen. Messages are replaced by the final response.
-
-### Settings Panel
-
-Accessible from the Chainlit sidebar. Contains optional API key input fields as described in the Provider Abstraction Layer section.
+Dark finance aesthetic: `#0f1117` background, `#00c896` green accent, Inter font. Configured via `.chainlit/config.toml` (`default_theme = "dark"`, `cot = "hidden"`) and `public/stylesheet.css`.
 
 ### Welcome Message
 
-On chat start, the agent displays a welcome message explaining its capabilities with example queries.
+On chat start, the agent displays a welcome message that mentions the active profile mode and example queries.
 
 ---
 
