@@ -276,6 +276,12 @@ class AgentState(TypedDict, total=False):
     # clickable links below the narrative, not buried inside it.
     # Read by: Chainlit app.py.
 
+    synthesizer_context: Optional[str]
+    # The assembled data prompt that was sent to the LLM (price, news, filings, etc.)
+    # Saved so LangSmith hallucination evaluators can check response_text against
+    # the actual facts the model had access to.
+    # Not displayed in the UI.
+
     # -------------------------------------------------------------------------
     # Node 10: Chart Generator
     # Reads: ticker, price_data (specifically daily_prices)

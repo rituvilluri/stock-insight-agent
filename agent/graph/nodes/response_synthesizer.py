@@ -383,6 +383,7 @@ def synthesize_response(state: AgentState) -> AgentState:
             **state,
             "response_text": response_text,
             "sources_cited": sources_cited,
+            "synthesizer_context": prompt,
             "synthesizer_error": None,
         }
 
