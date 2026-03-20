@@ -99,6 +99,17 @@ If no date range can be determined, respond:
 # Layer 1: simple relative range patterns
 # ---------------------------------------------------------------------------
 
+def _quarter_range(quarter: int, year: int) -> tuple[str, str, str]:
+    """Return (start_iso, end_iso, context) for a calendar quarter."""
+    import calendar
+    month_start = (quarter - 1) * 3 + 1
+    month_end = quarter * 3
+    _, last_day = calendar.monthrange(year, month_end)
+    start = f"{year}-{month_start:02d}-01"
+    end = f"{year}-{month_end:02d}-{last_day:02d}"
+    return start, end, f"Q{quarter} {year}"
+
+
 def _parse_simple_range(message: str) -> tuple[str, str, str] | None:
     """
     Match common relative date expressions via regex.
@@ -225,6 +236,16 @@ def _parse_simple_range(message: str) -> tuple[str, str, str] | None:
             ),
         ),
     ]
+
+    # "Q1 2024" / "Q3 of 2022" — absolute calendar quarters.
+    # Only added when "earnings" is NOT in the message so that earnings-relative
+    # queries (e.g. "around Q2 2024 earnings") fall through to Layer 2 instead
+    # of resolving as a full calendar quarter here.
+    if "earnings" not in message.lower():
+        patterns.append((
+            re.compile(r"\bQ([1-4])\s+(?:of\s+)?(\d{4})\b", re.IGNORECASE),
+            lambda m: _quarter_range(int(m.group(1)), int(m.group(2))),
+        ))
 
     for pattern, handler in patterns:
         match = pattern.search(message)
