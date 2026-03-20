@@ -7,14 +7,28 @@ One-time setup steps per project. These are UI actions that cannot be automated.
 1. Go to LangSmith → Projects → `stock-insight-agent`
 2. Confirm `LANGCHAIN_TRACING_V2=true` and `LANGCHAIN_PROJECT=stock-insight-agent` are set in `.env`
 
-## Custom Evaluators (one-time per evaluator)
+## Running Experiments (fully automated)
 
-For each evaluator in `tests/evaluators/custom_evaluators.py`:
+The preferred approach — no UI setup required:
+
+```bash
+source .venv/bin/activate
+PYTHONPATH=. python tests/evaluators/run_experiment.py
+```
+
+This runs all 6 evaluators against the dataset and uploads results to LangSmith
+under the experiment name `baseline-post-review`. View results at smith.langchain.com.
+
+## Custom Evaluators (UI approach — optional)
+
+If you want to save evaluators for reuse from the LangSmith UI:
 
 1. LangSmith → Experiments → Evaluators → **+ New Evaluator**
 2. Name: (use the key from the function, e.g. `date_range_accuracy`)
 3. Type: **Python Code**
-4. Paste the function body from `tests/evaluators/custom_evaluators.py`
+4. Adapt the function from `tests/evaluators/custom_evaluators.py` to use
+   the UI signature: `def fn(run, example)` where `run.outputs` and `example.outputs`
+   replace the `outputs` and `reference_outputs` parameters
 5. Save
 
 Evaluators to create (6 total):

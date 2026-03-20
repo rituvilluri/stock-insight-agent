@@ -1,32 +1,32 @@
 """
 LangSmith custom evaluators for the Stock Insight Agent.
 
-These functions are used as custom code evaluators in LangSmith experiments.
-To use: copy each function into a LangSmith evaluator via the UI
-(Experiments → Evaluators → + New Evaluator → Python Code).
+Two usage modes:
 
-Each function signature: evaluate(run, example) -> dict
-  run:     the LangSmith run object (contains inputs and outputs)
-  example: the dataset example (contains reference outputs)
-  return:  {"key": "evaluator_name", "score": 0.0–1.0}
+1. SDK / run_experiment.py (signature: outputs, reference_outputs):
+   Used by client.evaluate() in run_experiment.py. Each function receives the
+   graph's output dict and the dataset example's expected outputs.
+
+2. LangSmith UI (signature: run, example):
+   If you want to save an evaluator in the LangSmith UI (Experiments → Evaluators
+   → + New Evaluator → Python Code), see docs/langsmith-setup.md for the UI
+   variant of each function. The logic is identical; only the signature differs.
 """
 
 
-def date_range_accuracy(run, example) -> dict:
-    """
-    Assert start_date and end_date match the quarter/period in the query.
-    Score: 1.0 if both dates match expected, 0.0 otherwise.
+# ---------------------------------------------------------------------------
+# SDK evaluators  (outputs: dict, reference_outputs: dict) -> dict
+# ---------------------------------------------------------------------------
 
-    Expected outputs in dataset example:
-      {"start_date": "YYYY-MM-DD", "end_date": "YYYY-MM-DD"}
+def date_range_accuracy(outputs: dict, reference_outputs: dict) -> dict:
     """
-    outputs = run.outputs or {}
-    reference = example.outputs or {}
-
+    Assert start_date and end_date match the expected values in the dataset example.
+    Score: 1.0 if both match, 0.0 otherwise. None if no reference dates provided.
+    """
     actual_start = outputs.get("start_date", "")
     actual_end = outputs.get("end_date", "")
-    expected_start = reference.get("start_date", "")
-    expected_end = reference.get("end_date", "")
+    expected_start = reference_outputs.get("start_date", "")
+    expected_end = reference_outputs.get("end_date", "")
 
     if not expected_start or not expected_end:
         return {"key": "date_range_accuracy", "score": None, "comment": "No reference dates in example"}
@@ -39,13 +39,12 @@ def date_range_accuracy(run, example) -> dict:
     }
 
 
-def chart_generated_when_requested(run, example) -> dict:
+def chart_generated_when_requested(outputs: dict, reference_outputs: dict) -> dict:
     """
     If chart_requested=True in output, assert chart_data is non-null.
-    Score: 1.0 if chart_requested=False (nothing to check) or chart_data is present.
-            0.0 if chart_requested=True but chart_data is None.
+    Score: 1.0 if chart was not requested, or if chart_data is present.
+            0.0 if chart was requested but chart_data is None.
     """
-    outputs = run.outputs or {}
     chart_requested = outputs.get("chart_requested", False)
     chart_data = outputs.get("chart_data")
 
@@ -60,14 +59,12 @@ def chart_generated_when_requested(run, example) -> dict:
     }
 
 
-def rag_chunks_retrieved(run, example) -> dict:
+def rag_chunks_retrieved(outputs: dict, reference_outputs: dict) -> dict:
     """
-    If intent includes filings (stock_analysis or general_lookup),
-    assert len(filing_chunks) > 0.
+    If intent is stock_analysis or general_lookup, assert filing_chunks is non-empty.
     Score: 1.0 if chunks present or intent does not require filings.
             0.0 if intent requires filings and chunks is empty.
     """
-    outputs = run.outputs or {}
     intent = outputs.get("intent", "")
     filing_chunks = outputs.get("filing_chunks") or []
 
@@ -82,17 +79,15 @@ def rag_chunks_retrieved(run, example) -> dict:
     }
 
 
-def response_depth_respected(run, example) -> dict:
+def response_depth_respected(outputs: dict, reference_outputs: dict) -> dict:
     """
     If response_depth=deep, assert all 5 markdown sections are present in response_text.
-    Score: 1.0 if depth=quick (no sections required) or all 5 sections present.
-            0.0 if depth=deep and any section is missing.
+    Score: 1.0 if depth=quick or all 5 sections present. 0.0 if any section missing.
 
     Section names match the response_synthesizer deep prompt:
       ## Price Action, ## News & Catalysts, ## Market Sentiment,
       ## SEC Filings, ## Options Activity
     """
-    outputs = run.outputs or {}
     response_depth = outputs.get("response_depth", "quick")
     response_text = outputs.get("response_text") or ""
 
@@ -115,19 +110,13 @@ def response_depth_respected(run, example) -> dict:
     }
 
 
-def intent_accuracy(run, example) -> dict:
+def intent_accuracy(outputs: dict, reference_outputs: dict) -> dict:
     """
-    Assert output intent matches expected_intent in dataset example.
-    Score: 1.0 if match, 0.0 otherwise.
-
-    Expected outputs in dataset example:
-      {"intent": "stock_analysis"}  (or whichever intent is expected)
+    Assert output intent matches the expected intent in the dataset example.
+    Score: 1.0 if match, 0.0 otherwise. None if no reference intent provided.
     """
-    outputs = run.outputs or {}
-    reference = example.outputs or {}
-
     actual = outputs.get("intent", "")
-    expected = reference.get("intent", "")
+    expected = reference_outputs.get("intent", "")
 
     if not expected:
         return {"key": "intent_accuracy", "score": None, "comment": "No reference intent in example"}
@@ -140,13 +129,12 @@ def intent_accuracy(run, example) -> dict:
     }
 
 
-def source_attribution(run, example) -> dict:
+def source_attribution(outputs: dict, reference_outputs: dict) -> dict:
     """
-    Assert len(sources_cited) > 0 when news_articles or filing_chunks are non-empty.
-    Score: 1.0 if sources_cited is populated when data is available, or if no data available.
+    Assert sources_cited is non-empty when news_articles or filing_chunks are available.
+    Score: 1.0 if sources cited when data available, or no data available.
             0.0 if data was available but no sources were cited.
     """
-    outputs = run.outputs or {}
     news_articles = outputs.get("news_articles") or []
     filing_chunks = outputs.get("filing_chunks") or []
     sources_cited = outputs.get("sources_cited") or []
@@ -162,3 +150,13 @@ def source_attribution(run, example) -> dict:
         "score": score,
         "comment": f"{len(sources_cited)} sources cited, {len(news_articles)} news + {len(filing_chunks)} filing chunks available",
     }
+
+
+ALL_EVALUATORS = [
+    date_range_accuracy,
+    chart_generated_when_requested,
+    rag_chunks_retrieved,
+    response_depth_respected,
+    intent_accuracy,
+    source_attribution,
+]
