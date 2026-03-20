@@ -152,6 +152,59 @@ def source_attribution(outputs: dict, reference_outputs: dict) -> dict:
     }
 
 
+def hallucination(outputs: dict, reference_outputs: dict) -> dict:
+    """
+    LLM-as-judge: checks whether response_text makes claims not supported
+    by synthesizer_context (the actual data the model was given).
+
+    Score: 1.0 = no hallucination detected, 0.0 = hallucination detected.
+    Returns None if synthesizer_context or response_text is missing.
+    """
+    import json
+    from langchain_groq import ChatGroq
+    from langchain_core.messages import HumanMessage
+
+    response_text = outputs.get("response_text")
+    context = outputs.get("synthesizer_context")
+
+    if not response_text or not context:
+        return {"key": "hallucination", "score": None, "comment": "Missing response_text or synthesizer_context"}
+
+    judge = ChatGroq(model="llama-3.1-8b-instant", temperature=0, max_tokens=256)
+
+    prompt = f"""You are evaluating whether an AI response hallucinates facts not present in the source data.
+
+<source_data>
+{context[:3000]}
+</source_data>
+
+<response>
+{response_text[:2000]}
+</response>
+
+Does the response make any specific factual claims (numbers, dates, events, quotes) that are NOT supported by the source data above?
+
+Reply with JSON only: {{"hallucination": true/false, "reason": "one sentence"}}"""
+
+    try:
+        result = judge.invoke([HumanMessage(content=prompt)])
+        raw = result.content.strip()
+        if raw.startswith("```"):
+            raw = raw.split("```")[1]
+            if raw.lower().startswith("json"):
+                raw = raw[4:]
+            raw = raw.strip()
+        parsed = json.loads(raw)
+        detected = parsed.get("hallucination", False)
+        return {
+            "key": "hallucination",
+            "score": 0.0 if detected else 1.0,
+            "comment": parsed.get("reason", ""),
+        }
+    except Exception as e:
+        return {"key": "hallucination", "score": None, "comment": f"Judge failed: {e}"}
+
+
 ALL_EVALUATORS = [
     date_range_accuracy,
     chart_generated_when_requested,
@@ -159,4 +212,5 @@ ALL_EVALUATORS = [
     response_depth_respected,
     intent_accuracy,
     source_attribution,
+    hallucination,
 ]
