@@ -217,13 +217,17 @@ def _parse_simple_range(message: str) -> tuple[str, str, str] | None:
                 f"{m.group(1)} days ago",
             ),
         ),
-        # "Q1 2024" / "Q3 of 2022" — absolute calendar quarters
-        # Must come after relative patterns so "last quarter" doesn't conflict.
-        (
+    ]
+
+    # "Q1 2024" / "Q3 of 2022" — absolute calendar quarters.
+    # Only added when "earnings" is NOT in the message so that earnings-relative
+    # queries (e.g. "around Q2 2024 earnings") fall through to Layer 2 instead
+    # of resolving as a full calendar quarter here.
+    if "earnings" not in message.lower():
+        patterns.append((
             re.compile(r"\bQ([1-4])\s+(?:of\s+)?(\d{4})\b", re.IGNORECASE),
             lambda m: _quarter_range(int(m.group(1)), int(m.group(2))),
-        ),
-    ]
+        ))
 
     for pattern, handler in patterns:
         match = pattern.search(message)
