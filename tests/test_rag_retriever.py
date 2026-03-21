@@ -76,13 +76,22 @@ def test_no_end_date_returns_empty():
 
 
 @patch.dict(os.environ, {}, clear=True)
-def test_missing_gemini_key_returns_error():
-    # Remove GEMINI_API_KEY from env entirely
+def test_missing_gemini_key_uses_fallback():
+    """When GEMINI_API_KEY is absent, the node falls back to sentence-transformers
+    rather than returning an error, so filing_error should remain None."""
     env_without_key = {k: v for k, v in os.environ.items() if k != "GEMINI_API_KEY"}
     with patch.dict(os.environ, env_without_key, clear=True):
-        result = retrieve_rag_context(BASE_STATE)
+        # Patch _get_collection and _embed_query to avoid real I/O
+        with patch("agent.graph.nodes.rag_retriever._get_collection") as mock_col,              patch("agent.graph.nodes.rag_retriever._embed_query", return_value=[0.1] * 384):
+            mock_collection = MagicMock()
+            mock_collection.count.return_value = 0
+            mock_collection.query.return_value = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
+            mock_col.return_value = mock_collection
+            # Also patch _get_cik to avoid real network call
+            with patch("agent.graph.nodes.rag_retriever._get_cik", return_value=None):
+                result = retrieve_rag_context(BASE_STATE)
     assert result["filing_chunks"] == []
-    assert "GEMINI_API_KEY" in result["filing_error"]
+    assert result["filing_error"] is None
 
 
 # ---------------------------------------------------------------------------
@@ -420,3 +429,24 @@ def test_returns_only_owned_fields():
     assert "extra_field_that_should_not_leak" not in result
     assert "user_message" not in result
     assert "ticker" not in result
+
+
+def test_strip_html_removes_style_and_script():
+    html = """
+    <html><head><style>body { margin: 0; }</style>
+    <script>alert('test');</script></head>
+    <body><p>Revenue was $44.1 billion in Q3 2024.</p>
+    <table><tr><td>Net income</td><td>$18.8B</td></tr></table>
+    </body></html>
+    """
+    result = _strip_html(html)
+    assert "margin" not in result
+    assert "alert" not in result
+    assert "Revenue" in result
+    assert "Net income" in result
+
+
+def test_strip_html_minimum_length():
+    html = "<html><body>" + "<p>This is important financial information. " * 100 + "</p></body></html>"
+    result = _strip_html(html)
+    assert len(result) > 500

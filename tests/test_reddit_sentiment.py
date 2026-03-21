@@ -166,6 +166,17 @@ def test_classify_batch_handles_markdown_fence(mock_llm):
     assert labels == ["neutral"]
 
 
+@patch("agent.graph.nodes.reddit_sentiment.llm_classifier")
+def test_classify_batch_handles_uppercase_json_fence(mock_llm):
+    """```JSON (uppercase) fence must be stripped correctly."""
+    mock_llm.invoke.return_value = MagicMock(
+        content='```JSON\n[{"index": 0, "sentiment": "bullish"}]\n```'
+    )
+    posts = [{"title": "NVDA to the moon", "snippet": "great results"}]
+    labels = _classify_batch(posts)
+    assert labels == ["bullish"]
+
+
 # ---------------------------------------------------------------------------
 # _classify_all — batching
 # ---------------------------------------------------------------------------

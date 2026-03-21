@@ -282,3 +282,33 @@ def test_retrieve_news_unexpected_exception_writes_error(mock_key):
     assert result["news_source_used"] == "none"
     assert result["news_error"] is not None
     assert "unexpected" in result["news_error"]
+
+
+@patch("agent.graph.nodes.news_retriever.NewsApiClient")
+def test_fetch_newsapi_parameter_invalid_returns_none(mock_client_cls):
+    """NewsAPI parameterInvalid error (free tier date range limit) returns None."""
+    mock_client = MagicMock()
+    mock_client.get_everything.return_value = {
+        "status": "error",
+        "code": "parameterInvalid",
+        "message": "You are not allowed to use the from parameter for your plan level.",
+    }
+    mock_client_cls.return_value = mock_client
+
+    result = _fetch_newsapi("NVDA", "NVIDIA", "2023-01-01", "2023-06-30", "fake-key")
+    assert result is None
+
+
+@patch("agent.graph.nodes.news_retriever.NewsApiClient")
+def test_fetch_newsapi_upgrade_message_returns_none(mock_client_cls):
+    """NewsAPI 'upgrade' message (paid tier required) returns None."""
+    mock_client = MagicMock()
+    mock_client.get_everything.return_value = {
+        "status": "error",
+        "code": "rateLimited",
+        "message": "Please upgrade your plan to access this feature.",
+    }
+    mock_client_cls.return_value = mock_client
+
+    result = _fetch_newsapi("NVDA", "NVIDIA", "2023-01-01", "2023-06-30", "fake-key")
+    assert result is None

@@ -30,13 +30,21 @@ import os
 import re
 import time
 from datetime import datetime
-from html.parser import HTMLParser
 from typing import Optional
 
+from bs4 import BeautifulSoup
+
 import chromadb
-from google import genai
-from google.genai import types as genai_types
+try:
+    from google import genai
+    from google.genai import types as genai_types
+    _GENAI_AVAILABLE = True
+except ImportError:
+    genai = None  # type: ignore[assignment]
+    genai_types = None  # type: ignore[assignment]
+    _GENAI_AVAILABLE = False
 import requests
+from langsmith import traceable
 
 from agent.graph.nodes.state import AgentState
 
@@ -47,8 +55,8 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "data/vector_store")
-COLLECTION_NAME = "sec_filings_gemini_text_embedding_004"
-EMBEDDING_MODEL = "models/text-embedding-004"
+COLLECTION_NAME = "sec_filings_gemini_embedding_001"
+EMBEDDING_MODEL = "models/gemini-embedding-001"
 EDGAR_BASE = "https://data.sec.gov"
 EDGAR_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik}.json"
 EDGAR_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -66,30 +74,25 @@ _MAX_FILINGS_TO_INGEST = 3   # cap ingestion per query to stay within rate limit
 # HTML cleaning
 # ---------------------------------------------------------------------------
 
-class _TagStripper(HTMLParser):
-    """Minimal HTML → plain text converter (no third-party deps)."""
-
-    def __init__(self):
-        super().__init__()
-        self._parts: list[str] = []
-
-    def handle_data(self, data: str) -> None:
-        self._parts.append(data)
-
-    def get_text(self) -> str:
-        return " ".join(self._parts)
-
-
 def _strip_html(html: str) -> str:
-    parser = _TagStripper()
+    """
+    Extract plain text from SEC filing HTML using BeautifulSoup4.
+
+    Why BeautifulSoup over stdlib HTMLParser?
+    SEC 10-K/10-Q filings contain <style>, <script>, and inline XBRL tags
+    that HTMLParser includes verbatim. BeautifulSoup lets us decompose
+    unwanted tags before extracting text, producing clean prose.
+    """
     try:
-        parser.feed(html)
-    except Exception:
-        pass
-    text = parser.get_text()
-    # Collapse whitespace runs
-    text = re.sub(r"\s+", " ", text).strip()
-    return text
+        soup = BeautifulSoup(html, "html.parser")
+        for tag in soup(["style", "script", "meta", "link", "head"]):
+            tag.decompose()
+        text = soup.get_text(separator=" ")
+        text = re.sub(r"\s+", " ", text).strip()
+        return text
+    except Exception as e:
+        logger.warning("_strip_html failed: %s — returning empty string", e)
+        return ""
 
 
 # ---------------------------------------------------------------------------
@@ -129,37 +132,96 @@ def _chunk_text(text: str, ticker: str, filing_type: str, period: str) -> list[d
 # Embedding
 # ---------------------------------------------------------------------------
 
-def _get_genai_client() -> genai.Client:
-    return genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+def _get_embedding_fn():
+    """
+    Return (embed_texts_fn, embed_query_fn) based on available credentials.
+
+    Priority:
+      1. Google Gemini text-embedding-004 if GEMINI_API_KEY is set.
+      2. sentence-transformers all-MiniLM-L6-v2 as a local fallback.
+
+    The sentence-transformers fallback produces 384-dim vectors vs Gemini's
+    768-dim vectors.  Both work with ChromaDB's cosine distance metric, but
+    embeddings from different models are NOT interchangeable — a fresh
+    collection should be used when switching models.
+    """
+    gemini_key = os.getenv("GEMINI_API_KEY")
+    if gemini_key and _GENAI_AVAILABLE:
+        client = genai.Client(api_key=gemini_key)
+
+        def embed_texts_gemini(texts: list[str]) -> list[list[float]]:
+            all_vectors = []
+            for i in range(0, len(texts), 100):
+                batch = texts[i : i + 100]
+                # Gemini free tier: 100 req/min. Add inter-batch delay to avoid 429.
+                if i > 0:
+                    time.sleep(1.0)
+                for attempt in range(3):
+                    try:
+                        response = client.models.embed_content(
+                            model=EMBEDDING_MODEL,
+                            contents=batch,
+                            config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
+                        )
+                        all_vectors.extend([e.values for e in response.embeddings])
+                        break
+                    except Exception as e:
+                        if "429" in str(e) and attempt < 2:
+                            wait = 60 * (attempt + 1)
+                            logger.warning("Gemini rate limit hit — waiting %ds before retry", wait)
+                            time.sleep(wait)
+                        else:
+                            raise
+            return all_vectors
+
+        def embed_query_gemini(text: str) -> list[float]:
+            response = client.models.embed_content(
+                model=EMBEDDING_MODEL,
+                contents=text,
+                config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
+            )
+            return response.embeddings[0].values
+
+        return embed_texts_gemini, embed_query_gemini
+
+    # Fallback: sentence-transformers all-MiniLM-L6-v2 (local, no API key needed)
+    logger.warning(
+        "GEMINI_API_KEY not set — falling back to sentence-transformers all-MiniLM-L6-v2. "
+        "Embeddings are 384-dim (vs Gemini 768-dim). Use a separate ChromaDB collection "
+        "to avoid mixing incompatible vectors."
+    )
+    from sentence_transformers import SentenceTransformer  # noqa: PLC0415
+    _st_model = SentenceTransformer("all-MiniLM-L6-v2")
+
+    def embed_texts_st(texts: list[str]) -> list[list[float]]:
+        return _st_model.encode(texts, show_progress_bar=False).tolist()
+
+    def embed_query_st(text: str) -> list[float]:
+        return _st_model.encode([text], show_progress_bar=False)[0].tolist()
+
+    return embed_texts_st, embed_query_st
+
+
+# Module-level embed functions — resolved once at import time if GEMINI_API_KEY
+# is set, or lazily on first call via _get_embedding_fn().
+_embed_texts_fn = None
+_embed_query_fn = None
 
 
 def _embed_texts(texts: list[str]) -> list[list[float]]:
-    """
-    Batch-embed texts using Gemini text-embedding-004.
-    Processes in batches of 100 (API limit).
-    """
-    client = _get_genai_client()
-    all_vectors = []
-    batch_size = 100
-    for i in range(0, len(texts), batch_size):
-        batch = texts[i : i + batch_size]
-        response = client.models.embed_content(
-            model=EMBEDDING_MODEL,
-            contents=batch,
-            config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-        )
-        all_vectors.extend([e.values for e in response.embeddings])
-    return all_vectors
+    """Batch-embed texts using the active embedding backend."""
+    global _embed_texts_fn, _embed_query_fn
+    if _embed_texts_fn is None:
+        _embed_texts_fn, _embed_query_fn = _get_embedding_fn()
+    return _embed_texts_fn(texts)
 
 
 def _embed_query(text: str) -> list[float]:
-    client = _get_genai_client()
-    response = client.models.embed_content(
-        model=EMBEDDING_MODEL,
-        contents=text,
-        config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
-    )
-    return response.embeddings[0].values
+    """Embed a query string using the active embedding backend."""
+    global _embed_texts_fn, _embed_query_fn
+    if _embed_query_fn is None:
+        _embed_texts_fn, _embed_query_fn = _get_embedding_fn()
+    return _embed_query_fn(text)
 
 
 # ---------------------------------------------------------------------------
@@ -269,11 +331,14 @@ def _discover_filings(cik: str, ticker: str, start_date: str, end_date: str) -> 
     return results
 
 
+@traceable(name="rag:edgar-download")
 def _download_filing(cik: str, accession_no: str, primary_doc: str) -> Optional[str]:
     """Download a filing document from EDGAR and return clean plain text."""
-    # Format accession number with dashes for the URL
-    acc_dashed = f"{accession_no[:10]}-{accession_no[10:12]}-{accession_no[12:]}"
-    url = f"{EDGAR_FILING_BASE}/{int(cik)}/{acc_dashed}/{primary_doc}"
+    # EDGAR Archive URLs use the accession number WITHOUT dashes in the path segment.
+    # e.g. /Archives/edgar/data/{cik}/{acc_no_dashes}/{primary_doc}
+    # accession_no is already stored without dashes by _discover_filings.
+    acc_no_dashes = accession_no.replace("-", "")
+    url = f"{EDGAR_FILING_BASE}/{int(cik)}/{acc_no_dashes}/{primary_doc}"
     resp = _edgar_get(url)
     if not resp:
         return None
@@ -292,6 +357,7 @@ def _get_collection() -> chromadb.Collection:
     )
 
 
+@traceable(name="rag:ingest-filing")
 def _ingest_filing(collection: chromadb.Collection, filing: dict, ticker: str) -> int:
     """
     Download, chunk, embed, and store a single filing.
@@ -327,6 +393,7 @@ def _ingest_filing(collection: chromadb.Collection, filing: dict, ticker: str) -
     return len(new_chunks)
 
 
+@traceable(name="rag:query-chromadb")
 def _query_collection(
     collection: chromadb.Collection,
     ticker: str,
@@ -407,11 +474,6 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
         logger.debug("retrieve_rag_context: no date range for %s, skipping", ticker)
         return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_api_key:
-        logger.warning("retrieve_rag_context: GEMINI_API_KEY not set")
-        return {"filing_chunks": [], "filing_ingested": False, "filing_error": "GEMINI_API_KEY not configured"}
-
     try:
         logger.info("retrieve_rag_context: START ticker=%s range=[%s → %s]", ticker, start_date, end_date)
 
@@ -490,6 +552,11 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
         logger.info(
             "retrieve_rag_context: DONE — ingested=%d retrieved=%d for %s",
             total_new, len(chunks), ticker,
+        )
+        logger.info(
+            "rag_retriever metadata — chunks_retrieved=%d filing_periods=%s",
+            len(chunks),
+            [f["period"] for f in filings] if filings else [],
         )
         return {"filing_chunks": chunks, "filing_ingested": total_new > 0, "filing_error": None}
 
