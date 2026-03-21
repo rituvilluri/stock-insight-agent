@@ -74,7 +74,6 @@ _CURRENT_SNAPSHOT_PHRASES = [
     "happening now",
     "current market",
     "current conditions",
-    "right now",
 ]
 
 # ---------------------------------------------------------------------------
@@ -235,6 +234,31 @@ def _parse_simple_range(message: str) -> tuple[str, str, str] | None:
                 f"{m.group(1)} days ago",
             ),
         ),
+        # "Q1 2024" / "Q1 of 2024" style — calendar quarter as date range.
+        # Skipped when "earnings" is present so Layer 2 can build the precise
+        # ±window from the actual earnings date. Without that skip, Layer 1
+        # would match first and return the raw quarter boundaries instead.
+        (
+            re.compile(r"[Qq]([1-4])\s*(?:of\s+)?(?:20)?(\d{2})\b", re.IGNORECASE),
+            lambda m: None if re.search(r"earnings?", message, re.IGNORECASE) else (
+                _fmt(
+                    datetime(
+                        2000 + int(m.group(2)) if int(m.group(2)) < 100 else int(m.group(2)),
+                        _QUARTER_MONTHS[int(m.group(1))][0],
+                        1,
+                    )
+                ),
+                _fmt(
+                    datetime(
+                        2000 + int(m.group(2)) if int(m.group(2)) < 100 else int(m.group(2)),
+                        _QUARTER_MONTHS[int(m.group(1))][1],
+                        28 if _QUARTER_MONTHS[int(m.group(1))][1] == 2 else 30
+                        if _QUARTER_MONTHS[int(m.group(1))][1] in (4, 6, 9, 11) else 31,
+                    )
+                ),
+                f"Q{m.group(1)} {2000 + int(m.group(2)) if int(m.group(2)) < 100 else int(m.group(2))}",
+            ),
+        ),
     ]
 
     # "Q1 2024" / "Q3 of 2022" — absolute calendar quarters.
@@ -250,7 +274,11 @@ def _parse_simple_range(message: str) -> tuple[str, str, str] | None:
     for pattern, handler in patterns:
         match = pattern.search(message)
         if match:
-            start, end, ctx = handler(match)
+            result = handler(match)
+            if result is None:
+                # Handler explicitly deferred (e.g. Q pattern with earnings keyword)
+                continue
+            start, end, ctx = result
             return start, end, ctx
 
     return None
@@ -362,6 +390,11 @@ def _parse_earnings_range(
 # Layer 3: LLM fallback
 # ---------------------------------------------------------------------------
 
+# Layer 3 LLM token budget: max_tokens=256 is sufficient for the 3-field JSON
+# response. Accuracy on complex date expressions (e.g., "during the COVID crash")
+# is the real constraint — this is acceptable for the ~5% of queries that reach
+# Layer 3. If Layer 3 accuracy becomes a problem, increase max_tokens to 512
+# and/or switch to llm_synthesizer (70B) for Layer 3 only.
 def _parse_with_llm(message: str) -> tuple[str, str, str] | None:
     """
     Ask the LLM to extract a date range from a complex/ambiguous message.

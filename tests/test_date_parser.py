@@ -331,7 +331,29 @@ def test_node_preserves_existing_state_fields():
 
 
 # ---------------------------------------------------------------------------
-# Task 1: Q{N} [of] YYYY Layer 1 regex
+# Exhaustive Layer 1 edge cases — must never reach LLM
+# ---------------------------------------------------------------------------
+
+@pytest.mark.parametrize("message", [
+    "last 7 days", "last 30 days", "last 1 day", "past 3 weeks", "past 1 week",
+    "last 6 months", "past 1 month", "last week", "last month", "last quarter",
+    "last year", "this week", "this month", "yesterday", "3 months ago",
+    "1 month ago", "2 weeks ago", "1 week ago", "5 days ago",
+    "Q1 2024", "Q2 2023", "Q3 2022", "Q4 2025", "Q1 of 2024", "Q3 of 2025",
+    "How did NVDA do Q4 2025? Show me a chart too.",
+])
+def test_layer1_does_not_reach_llm(message):
+    """Every Layer 1 pattern must resolve without calling the LLM."""
+    state = {"user_message": message, "user_config": {}, "ticker": "NVDA"}
+    with patch("agent.graph.nodes.date_parser.llm_classifier") as mock_llm:
+        mock_llm.invoke.side_effect = AssertionError("Layer 3 LLM called unexpectedly")
+        result = parse_dates(state)
+    assert result.get("date_missing") is False, f"Layer 1 missed: {message!r}"
+    assert result.get("date_error") is None
+
+
+# ---------------------------------------------------------------------------
+# Task 1: Q{N} [of] YYYY Layer 1 regex — exact boundary assertions
 # ---------------------------------------------------------------------------
 
 BASE_STATE = {"user_message": "", "user_config": {}, "ticker": "NVDA"}

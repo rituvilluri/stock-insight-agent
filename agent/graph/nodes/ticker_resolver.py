@@ -72,6 +72,9 @@ TICKER_LOOKUP: dict[str, tuple[str, str]] = {
     # Palantir
     "palantir": ("PLTR", "Palantir"),
     "pltr": ("PLTR", "Palantir"),
+    # Broadcom
+    "broadcom": ("AVGO", "Broadcom"),
+    "avgo": ("AVGO", "Broadcom"),
     # Spotify
     "spotify": ("SPOT", "Spotify"),
     "spot": ("SPOT", "Spotify"),
@@ -97,9 +100,23 @@ TICKER_LOOKUP: dict[str, tuple[str, str]] = {
     "berkshire": ("BRK-B", "Berkshire Hathaway"),
 }
 
-# Regex to detect a standalone ticker: 1-5 uppercase letters, optionally
-# preceded/followed by a word boundary. We exclude single-letter words like
-# "I" or "A" to avoid false positives.
+# Words that match [A-Z]{2-5} but are never ticker symbols.
+# Layer 1 skips these to avoid false positives.
+_TICKER_BLOCKLIST = frozenset({
+    "CEO", "CFO", "COO", "IPO", "ETF", "SEC", "FED", "GDP", "CPI", "PPI",
+    "EPS", "PE", "AI", "ML", "API", "AR", "VR", "PR", "US", "EU",
+    "UK", "THE", "FOR", "AND", "OR", "BUT", "IN", "ON", "AT",
+    # Single-letter and common English words
+    "I", "A", "AN", "MY", "IF", "SO", "UP", "DO", "BE", "IS", "IT", "AS",
+    "TO",
+    # Quarter labels — date references, not tickers
+    "Q1", "Q2", "Q3", "Q4",
+    # Finance/media vocabulary that appears all-caps but is not a ticker
+    "NYSE", "NASDAQ", "CNBC", "NOW", "YTD", "ATH", "ALL", "DIP",
+    "FROM", "WITH", "BY", "NEW", "EV",
+})
+
+# Regex to detect a standalone ticker: 2-5 uppercase letters, word boundary.
 # Why word boundary (\b)? Without it, "PLANS" inside "EXPLAINS" would match.
 _DIRECT_TICKER_RE = re.compile(r"\b([A-Z]{2,5})\b")
 
@@ -125,20 +142,12 @@ def _detect_direct_ticker(message: str) -> tuple[str, str] | None:
     Return (ticker, company_name) if the message contains an all-caps ticker
     symbol typed directly by the user. Returns None if not found.
 
-    We use the ticker itself as the company_name placeholder here. The LLM
-    fallback (Layer 3) is not invoked in this path because the user has already
-    given us the symbol they want — the canonical name is less critical and can
-    be left as the ticker string for the Response Synthesizer to use.
+    Applies _TICKER_BLOCKLIST to filter common all-caps words that are not
+    ticker symbols (CEO, AI, GDP, etc.) before returning a match.
     """
     matches = _DIRECT_TICKER_RE.findall(message)
-    # Filter out common English acronyms that aren't tickers
-    _common_words = {"I", "A", "AN", "THE", "AND", "OR", "FOR", "IN", "ON",
-                     "AT", "TO", "DO", "BE", "IS", "IT", "AS", "US", "MY",
-                     "IF", "SO", "UP", "CEO", "CFO", "IPO", "ETF", "AI",
-                     "EPS", "PE", "GDP", "CPI", "FED", "SEC", "Q1", "Q2",
-                     "Q3", "Q4"}
     for match in matches:
-        if match not in _common_words:
+        if match not in _TICKER_BLOCKLIST:
             return (match, match)  # use ticker as company_name placeholder
     return None
 
