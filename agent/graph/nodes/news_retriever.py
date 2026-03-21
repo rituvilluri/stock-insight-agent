@@ -176,7 +176,10 @@ def _fetch_google_rss(
             end_dt = None
 
         articles = []
-        for entry in feed.entries[:_MAX_ARTICLES * 2]:  # parse extra, filter below
+        total_entries = len(feed.entries[:_MAX_ARTICLES * 2])
+        skipped_out_of_range = 0
+
+        for entry in feed.entries[:_MAX_ARTICLES * 2]:
             # feedparser normalises published_parsed to a time.struct_time in UTC
             published_dt = None
             if entry.get("published_parsed"):
@@ -185,6 +188,7 @@ def _fetch_google_rss(
             # Date-range filter
             if start_dt and end_dt and published_dt:
                 if not (start_dt <= published_dt <= end_dt):
+                    skipped_out_of_range += 1
                     continue
 
             published_str = published_dt.strftime("%Y-%m-%d") if published_dt else ""
@@ -200,8 +204,28 @@ def _fetch_google_rss(
             if len(articles) >= _MAX_ARTICLES:
                 break
 
+        logger.info(
+            "Google RSS: %d entries fetched, %d passed date filter [%s → %s], %d skipped out of range",
+            total_entries, len(articles), start_date, end_date, skipped_out_of_range,
+        )
+
         if not articles:
-            logger.info("Google RSS returned 0 articles in range for %s", query)
+            # Check if the range is likely outside RSS coverage (Google RSS typically
+            # covers only the last 30 days for most queries)
+            if start_dt:
+                days_ago = (datetime.now() - start_dt).days
+                if days_ago > 30:
+                    logger.warning(
+                        "Google RSS 0 articles: query range starts %d days ago — "
+                        "RSS likely has no coverage for dates older than ~30 days. "
+                        "All %d fetched entries were outside [%s → %s].",
+                        days_ago, total_entries, start_date, end_date,
+                    )
+                else:
+                    logger.info(
+                        "Google RSS 0 articles in range [%s → %s]: no matching entries in feed",
+                        start_date, end_date,
+                    )
             return None
 
         return articles
@@ -215,6 +239,12 @@ def _fetch_google_rss(
 # Node function
 # ---------------------------------------------------------------------------
 
+# LangSmith observation (2026-03-19): median latency ~1,014ms across 1 run (only
+# full stock_analysis trace in project). Second slowest node in the graph.
+# Primary bottleneck: Google News RSS HTTP round-trip (~1s). NewsAPI path would
+# be faster but NEWSAPI_KEY is absent in this env, so RSS fallback is always used.
+# Error rate: 0% across all runs — RSS fallback absorbs NewsAPI auth failures;
+# no run has ever written a non-null news_error in the current trace set.
 def retrieve_news(state: AgentState) -> AgentState:
     """
     Fetch news articles for the given ticker and date range.

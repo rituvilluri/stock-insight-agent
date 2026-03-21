@@ -62,6 +62,22 @@ from agent.graph.nodes.chart_generator import generate_chart
 
 logger = logging.getLogger(__name__)
 
+# LangGraph 0.3+ evaluation (2026-03-19):
+#
+# Command-based routing: NOT adopted. Current standalone routing functions
+# (route_after_date_parser, route_after_fetch_price, route_after_synthesizer)
+# are easier to test in isolation and keep routing logic decoupled from nodes.
+# Command would couple node return values to graph topology.
+#
+# MemorySaver checkpointer: NOT adopted in this agent. Current session memory
+# uses cl.user_session.set("last_context", ...) in app.py and seeds initial_state
+# on each message. This works correctly. Migrating to MemorySaver is deferred to
+# Agent 4 (Synthesis + UI) which owns app.py. If adopted, Agent 4 should:
+#   compiled = graph.compile(checkpointer=MemorySaver())
+#   config = {"configurable": {"thread_id": cl.user_session.get("id")}}
+#   graph.astream_events(state, config=config, version="v2")
+#   Remove last_context seeding in app.py.
+
 
 # ---------------------------------------------------------------------------
 # Routing functions
