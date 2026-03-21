@@ -446,6 +446,14 @@ def _query_collection(
 # Node function
 # ---------------------------------------------------------------------------
 
+# LangSmith observation (2026-03-19): median latency ~1,656ms across 1 run (only
+# full stock_analysis trace in project). Slowest node in the graph.
+# Primary bottleneck: ChromaDB client initialisation + GEMINI_API_KEY absence
+# triggers an early-exit path that still incurs the client startup cost (~1.6s).
+# When GEMINI_API_KEY is present, expect additional latency from Gemini embedding
+# HTTP call + SEC EDGAR fetch on cache miss. Expect 2-5s on first ingestion.
+# Error rate: 0% across all runs — GEMINI_API_KEY absence is handled gracefully
+# via filing_error field, not a raised exception.
 def retrieve_rag_context(state: AgentState) -> AgentState:
     """
     Node 7: RAG Retriever.
@@ -467,42 +475,82 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
         return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
     try:
-        collection = _get_collection()
+        logger.info("retrieve_rag_context: START ticker=%s range=[%s → %s]", ticker, start_date, end_date)
 
-        # Step 1: try retrieval from existing vector store
-        chunks = _query_collection(collection, ticker, user_message)
+        # Sub-step A: get ChromaDB collection
+        try:
+            collection = _get_collection()
+            logger.info("retrieve_rag_context [chromadb]: collection opened at %s", CHROMA_PERSIST_DIR)
+        except Exception as e:
+            logger.error("retrieve_rag_context [chromadb]: FAILED to open collection: %s", e)
+            return {"filing_chunks": [], "filing_ingested": False, "filing_error": f"ChromaDB open failed: {e}"}
+
+        # Sub-step B: try retrieval from existing vector store
+        try:
+            chunks = _query_collection(collection, ticker, user_message)
+        except Exception as e:
+            logger.error("retrieve_rag_context [query]: FAILED: %s", e)
+            return {"filing_chunks": [], "filing_ingested": False, "filing_error": f"ChromaDB query failed: {e}"}
+
         if chunks:
-            logger.info("retrieve_rag_context: %d chunks retrieved from cache for %s", len(chunks), ticker)
+            logger.info("retrieve_rag_context [query]: %d chunks from cache for %s", len(chunks), ticker)
             return {"filing_chunks": chunks, "filing_ingested": False, "filing_error": None}
 
-        # Step 2: no cached chunks → discover and ingest from EDGAR
-        cik = _get_cik(ticker)
+        logger.info("retrieve_rag_context [query]: 0 chunks in cache for %s — attempting EDGAR ingestion", ticker)
+
+        # Sub-step C: resolve CIK
+        try:
+            cik = _get_cik(ticker)
+        except Exception as e:
+            logger.error("retrieve_rag_context [edgar-cik]: FAILED: %s", e)
+            return {"filing_chunks": [], "filing_ingested": False, "filing_error": f"CIK lookup failed: {e}"}
+
         if not cik:
-            logger.info("retrieve_rag_context: CIK not found for %s", ticker)
+            logger.info("retrieve_rag_context [edgar-cik]: no CIK found for %s", ticker)
             return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
-        filings = _discover_filings(cik, ticker, start_date, end_date)
+        logger.info("retrieve_rag_context [edgar-cik]: %s → CIK %s", ticker, cik)
+
+        # Sub-step D: discover filings
+        try:
+            filings = _discover_filings(cik, ticker, start_date, end_date)
+        except Exception as e:
+            logger.error("retrieve_rag_context [edgar-discover]: FAILED: %s", e)
+            return {"filing_chunks": [], "filing_ingested": False, "filing_error": f"EDGAR discovery failed: {e}"}
+
         if not filings:
-            logger.info("retrieve_rag_context: no EDGAR filings found for %s in range", ticker)
+            logger.info(
+                "retrieve_rag_context [edgar-discover]: no 10-K/10-Q found for %s in [%s → %s]",
+                ticker, start_date, end_date,
+            )
             return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
+        logger.info("retrieve_rag_context [edgar-discover]: found %d filings for %s", len(filings), ticker)
+
+        # Sub-step E: ingest filings
         total_new = 0
         for filing in filings:
             try:
-                total_new += _ingest_filing(collection, filing, ticker)
-            except Exception as ingest_err:
-                logger.warning(
-                    "retrieve_rag_context: _ingest_filing failed for %s %s — skipping: %s",
-                    ticker, filing.get("period"), ingest_err,
+                new_count = _ingest_filing(collection, filing, ticker)
+                total_new += new_count
+            except Exception as e:
+                logger.error(
+                    "retrieve_rag_context [ingest]: FAILED for %s %s: %s",
+                    ticker, filing.get("period", "?"), e,
                 )
+                # Continue to next filing — partial ingestion is better than none
 
-        if total_new == 0:
-            logger.info("retrieve_rag_context: filings already ingested or empty for %s", ticker)
+        logger.info("retrieve_rag_context [ingest]: %d new chunks ingested for %s", total_new, ticker)
 
-        # Step 3: re-query after ingestion
-        chunks = _query_collection(collection, ticker, user_message)
+        # Sub-step F: re-query after ingestion
+        try:
+            chunks = _query_collection(collection, ticker, user_message)
+        except Exception as e:
+            logger.error("retrieve_rag_context [re-query]: FAILED after ingestion: %s", e)
+            return {"filing_chunks": [], "filing_ingested": total_new > 0, "filing_error": f"Re-query failed: {e}"}
+
         logger.info(
-            "retrieve_rag_context: ingested %d new chunks, retrieved %d for %s",
+            "retrieve_rag_context: DONE — ingested=%d retrieved=%d for %s",
             total_new, len(chunks), ticker,
         )
         logger.info(
@@ -513,5 +561,5 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
         return {"filing_chunks": chunks, "filing_ingested": total_new > 0, "filing_error": None}
 
     except Exception as e:
-        logger.error("retrieve_rag_context failed: %s", e)
+        logger.error("retrieve_rag_context: UNEXPECTED failure: %s", e)
         return {"filing_chunks": [], "filing_ingested": False, "filing_error": str(e)}

@@ -53,6 +53,7 @@ def _black_scholes_greeks(
     T: float,
     sigma: float,
     option_type: str = "call",
+    r: float = RISK_FREE_RATE,
 ) -> dict:
     """
     Calculate Delta, Gamma, Theta, and Vega for a European option.
@@ -63,14 +64,13 @@ def _black_scholes_greeks(
         T:           Time to expiration in years
         sigma:       Implied volatility (annualized, e.g. 0.30 for 30%)
         option_type: "call" or "put"
+        r:           Risk-free rate (annualized, default RISK_FREE_RATE)
 
     Returns dict with keys delta, gamma, theta, vega (all floats).
     Returns None values if inputs are invalid (T=0, sigma=0, etc.).
     """
-    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0:
+    if T <= 0 or sigma <= 0 or S <= 0 or K <= 0 or math.isnan(sigma) or math.isnan(S):
         return {"delta": None, "gamma": None, "theta": None, "vega": None}
-
-    r = RISK_FREE_RATE
     sqrt_T = math.sqrt(T)
 
     d1 = (math.log(S / K) + (r + 0.5 * sigma ** 2) * T) / (sigma * sqrt_T)

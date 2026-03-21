@@ -15,6 +15,7 @@ Synthesizer to add context ("volume was significantly elevated").
 No LLM calls in this node — pure data retrieval and arithmetic.
 """
 
+import asyncio
 import logging
 import os
 from datetime import datetime, timedelta
@@ -359,7 +360,16 @@ def _fetch_earnings_date(ticker: str) -> tuple[Optional[str], Optional[int]]:
 # Node function
 # ---------------------------------------------------------------------------
 
-def fetch_price_data(state: AgentState) -> AgentState:
+async def fetch_price_data(state: AgentState) -> AgentState:
+    """
+    Async wrapper: runs the sync I/O work in a thread executor so it does
+    not block LangGraph's async event loop.
+    """
+    loop = asyncio.get_running_loop()
+    return await loop.run_in_executor(None, _fetch_price_data_sync, state)
+
+
+def _fetch_price_data_sync(state: AgentState) -> AgentState:
     """
     Fetch OHLCV price data for the ticker and date range in state.
     Tries yfinance first; falls back to Alpha Vantage if configured.

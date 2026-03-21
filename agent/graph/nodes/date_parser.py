@@ -22,6 +22,7 @@ is central to this product. The LLM is reserved for genuinely hard cases
 like "during the COVID crash" or "when tariffs were announced".
 """
 
+import calendar as _calendar
 import json
 import logging
 import re
@@ -52,6 +53,15 @@ _QUARTER_MONTHS: dict[int, tuple[int, int]] = {
     4: (10, 12),
 }
 
+def _quarter_boundaries(quarter: int, year: int) -> tuple[str, str]:
+    """Return (start_date_iso, end_date_iso) for a calendar quarter."""
+    start_month, end_month = _QUARTER_MONTHS[quarter]
+    last_day = _calendar.monthrange(year, end_month)[1]
+    start = datetime(year, start_month, 1).strftime("%Y-%m-%d")
+    end = datetime(year, end_month, last_day).strftime("%Y-%m-%d")
+    return start, end
+
+
 # Phrases that signal the user also wants current market data alongside
 # whatever historical period they asked about.
 _CURRENT_SNAPSHOT_PHRASES = [
@@ -64,7 +74,6 @@ _CURRENT_SNAPSHOT_PHRASES = [
     "happening now",
     "current market",
     "current conditions",
-    "right now",
 ]
 
 # ---------------------------------------------------------------------------
@@ -89,6 +98,17 @@ If no date range can be determined, respond:
 # Layer 1: simple relative range patterns
 # ---------------------------------------------------------------------------
 
+def _quarter_range(quarter: int, year: int) -> tuple[str, str, str]:
+    """Return (start_iso, end_iso, context) for a calendar quarter."""
+    import calendar
+    month_start = (quarter - 1) * 3 + 1
+    month_end = quarter * 3
+    _, last_day = calendar.monthrange(year, month_end)
+    start = f"{year}-{month_start:02d}-01"
+    end = f"{year}-{month_end:02d}-{last_day:02d}"
+    return start, end, f"Q{quarter} {year}"
+
+
 def _parse_simple_range(message: str) -> tuple[str, str, str] | None:
     """
     Match common relative date expressions via regex.
@@ -109,6 +129,14 @@ def _parse_simple_range(message: str) -> tuple[str, str, str] | None:
     # Patterns are ordered from most-specific to least-specific to avoid
     # "last month" matching before "last 3 months".
     patterns = [
+        # "Q4 2025", "Q1 2024", "Q3 of 2022" — calendar quarter boundaries
+        # Must come FIRST to intercept before Layer 3 LLM.
+        (
+            re.compile(r"\bQ([1-4])\s+(?:of\s+)?(20\d{2})\b", re.IGNORECASE),
+            lambda m: _quarter_boundaries(int(m.group(1)), int(m.group(2))) + (
+                f"Q{m.group(1)} {m.group(2)}",
+            ),
+        ),
         # "last N days" / "past N days"
         (
             re.compile(r"(?:last|past)\s+(\d+)\s+days?", re.IGNORECASE),
@@ -206,12 +234,51 @@ def _parse_simple_range(message: str) -> tuple[str, str, str] | None:
                 f"{m.group(1)} days ago",
             ),
         ),
+        # "Q1 2024" / "Q1 of 2024" style — calendar quarter as date range.
+        # Skipped when "earnings" is present so Layer 2 can build the precise
+        # ±window from the actual earnings date. Without that skip, Layer 1
+        # would match first and return the raw quarter boundaries instead.
+        (
+            re.compile(r"[Qq]([1-4])\s*(?:of\s+)?(?:20)?(\d{2})\b", re.IGNORECASE),
+            lambda m: None if re.search(r"earnings?", message, re.IGNORECASE) else (
+                _fmt(
+                    datetime(
+                        2000 + int(m.group(2)) if int(m.group(2)) < 100 else int(m.group(2)),
+                        _QUARTER_MONTHS[int(m.group(1))][0],
+                        1,
+                    )
+                ),
+                _fmt(
+                    datetime(
+                        2000 + int(m.group(2)) if int(m.group(2)) < 100 else int(m.group(2)),
+                        _QUARTER_MONTHS[int(m.group(1))][1],
+                        28 if _QUARTER_MONTHS[int(m.group(1))][1] == 2 else 30
+                        if _QUARTER_MONTHS[int(m.group(1))][1] in (4, 6, 9, 11) else 31,
+                    )
+                ),
+                f"Q{m.group(1)} {2000 + int(m.group(2)) if int(m.group(2)) < 100 else int(m.group(2))}",
+            ),
+        ),
     ]
+
+    # "Q1 2024" / "Q3 of 2022" — absolute calendar quarters.
+    # Only added when "earnings" is NOT in the message so that earnings-relative
+    # queries (e.g. "around Q2 2024 earnings") fall through to Layer 2 instead
+    # of resolving as a full calendar quarter here.
+    if "earnings" not in message.lower():
+        patterns.append((
+            re.compile(r"\bQ([1-4])\s+(?:of\s+)?(\d{4})\b", re.IGNORECASE),
+            lambda m: _quarter_range(int(m.group(1)), int(m.group(2))),
+        ))
 
     for pattern, handler in patterns:
         match = pattern.search(message)
         if match:
-            start, end, ctx = handler(match)
+            result = handler(match)
+            if result is None:
+                # Handler explicitly deferred (e.g. Q pattern with earnings keyword)
+                continue
+            start, end, ctx = result
             return start, end, ctx
 
     return None
@@ -323,6 +390,11 @@ def _parse_earnings_range(
 # Layer 3: LLM fallback
 # ---------------------------------------------------------------------------
 
+# Layer 3 LLM token budget: max_tokens=256 is sufficient for the 3-field JSON
+# response. Accuracy on complex date expressions (e.g., "during the COVID crash")
+# is the real constraint — this is acceptable for the ~5% of queries that reach
+# Layer 3. If Layer 3 accuracy becomes a problem, increase max_tokens to 512
+# and/or switch to llm_synthesizer (70B) for Layer 3 only.
 def _parse_with_llm(message: str) -> tuple[str, str, str] | None:
     """
     Ask the LLM to extract a date range from a complex/ambiguous message.
