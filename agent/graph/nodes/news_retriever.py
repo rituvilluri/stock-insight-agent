@@ -127,8 +127,20 @@ def _fetch_newsapi(
             sort_by="relevancy",
             page_size=_MAX_ARTICLES,
         )
+        if response.get("status") == "error":
+            error_code = response.get("code", "")
+            message = response.get("message", "")
+            if error_code == "parameterInvalid":
+                logger.warning(
+                    "NewsAPI: date range [%s → %s] is outside free tier coverage (last 30 days). "
+                    "Upgrade to a paid plan for historical access.",
+                    start_date, end_date,
+                )
+            else:
+                logger.warning("NewsAPI returned error status: %s", message)
+            return None
         if response.get("status") != "ok":
-            logger.warning("NewsAPI returned status: %s", response.get("status"))
+            logger.warning("NewsAPI returned unexpected status: %s", response.get("status"))
             return None
 
         articles = response.get("articles") or []
@@ -304,6 +316,13 @@ def retrieve_news(state: AgentState) -> AgentState:
                     len(snapshot_articles),
                 )
 
+        logger.info(
+            "news_retriever metadata — articles_found=%d source_used=%s range=[%s → %s]",
+            len(articles) if articles else 0,
+            source_used,
+            start_date,
+            end_date,
+        )
         return {
             "news_articles": articles or None,
             "news_source_used": source_used,
