@@ -411,6 +411,11 @@ def _parse_with_llm(message: str) -> tuple[str, str, str] | None:
 
     raw = response.content.strip()
 
+    # Empty response from LLM (e.g. Groq rate limit or short-prompt edge case)
+    if not raw:
+        logger.warning("_parse_with_llm: LLM returned empty content")
+        return None
+
     # Strip markdown fences defensively
     if raw.startswith("```"):
         raw = raw.split("```")[1]
@@ -536,6 +541,20 @@ def parse_dates(state: AgentState) -> AgentState:
 
     except Exception as e:
         logger.error("parse_dates failed: %s", e)
+        # Preserve dates seeded from session context rather than wiping them.
+        seeded_start = state.get("start_date", "")
+        seeded_end = state.get("end_date", "")
+        if seeded_start and seeded_end:
+            logger.info(
+                "parse_dates: exception occurred but preserving session context %s to %s",
+                seeded_start, seeded_end,
+            )
+            return {
+                **state,
+                "date_missing": False,
+                "include_current_snapshot": False,
+                "date_error": str(e),
+            }
         return {
             **state,
             "start_date": "",

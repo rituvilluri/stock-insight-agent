@@ -2,11 +2,13 @@
 langchain>=0.3.25
 langgraph>=0.0.15
 langchain-groq
-langchain-openai~=0.3.22
+langchain-google-genai
 
 # LLM and API
-openai
 python-dotenv~=1.1.0
+
+# Observability
+langsmith
 
 # Data Processing
 pandas~=2.3.0
@@ -24,7 +26,6 @@ plotly
 mplfinance
 
 # News
-newsapi-python
 feedparser
 lxml
 
@@ -33,6 +34,5 @@ praw
 
 # Utilities
 tqdm
-pytest  # For testing
-pytest-asyncio  # Async test support for async node functions
-
+pytest
+pytest-asyncio

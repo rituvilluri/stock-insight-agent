@@ -57,7 +57,7 @@ def _rag_mocks():
 
     @contextlib.contextmanager
     def _patch_all():
-        with patch("agent.graph.nodes.news_retriever._fetch_newsapi", return_value=None):
+        with patch("agent.graph.nodes.news_retriever._fetch_articles", return_value=(None, "none")):
             with patch("agent.graph.nodes.news_retriever._fetch_google_rss", return_value=None):
                 with patch("agent.graph.nodes.rag_retriever._get_collection") as mock_col:
                     mock_col.return_value.count.return_value = 0
@@ -92,8 +92,7 @@ async def test_full_pipeline_stock_analysis_nvda_last_month():
     state = {
         "user_message": "How did NVDA do last month?",
         "user_config": {},
-        "response_depth": "quick",
-    }
+            }
 
     hist = _mock_yfinance_history()
     with patch("yfinance.Ticker", return_value=_mock_ticker(hist)):
@@ -119,8 +118,7 @@ async def test_date_q4_2025_resolves_correctly():
     state = {
         "user_message": "Tell me how Nvidia did Q4 2025. Show me a chart as well",
         "user_config": {},
-        "response_depth": "quick",
-    }
+            }
 
     hist = _mock_yfinance_history()
     with patch("yfinance.Ticker", return_value=_mock_ticker(hist)):
@@ -141,8 +139,7 @@ async def test_unknown_intent_routes_to_synthesizer_directly():
     state = {
         "user_message": "What is the capital of France?",
         "user_config": {},
-        "response_depth": "quick",
-    }
+            }
 
     with patch("agent.graph.nodes.data_fetcher.fetch_price_data") as mock_fetch:
         final = await graph.ainvoke(state)
@@ -161,8 +158,7 @@ async def test_date_missing_skips_data_nodes():
     state = {
         "user_message": "Tell me about NVDA",  # no date expression
         "user_config": {},
-        "response_depth": "quick",
-    }
+            }
 
     with patch("agent.graph.nodes.data_fetcher.fetch_price_data") as mock_fetch:
         final = await graph.ainvoke(state)
@@ -181,8 +177,7 @@ async def test_session_context_preserved_across_turns():
     state = {
         "user_message": "What about the chart?",
         "user_config": {},
-        "response_depth": "quick",
-        # Seeded from previous turn (as app.py does via last_context)
+                # Seeded from previous turn (as app.py does via last_context)
         "ticker": "NVDA",
         "company_name": "NVIDIA",
         "start_date": "2025-02-19",

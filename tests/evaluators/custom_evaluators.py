@@ -79,37 +79,6 @@ def rag_chunks_retrieved(outputs: dict, reference_outputs: dict) -> dict:
     }
 
 
-def response_depth_respected(outputs: dict, reference_outputs: dict) -> dict:
-    """
-    If response_depth=deep, assert all 5 markdown sections are present in response_text.
-    Score: 1.0 if depth=quick or all 5 sections present. 0.0 if any section missing.
-
-    Section names match the response_synthesizer deep prompt:
-      ## Price Action, ## News & Catalysts, ## Market Sentiment,
-      ## SEC Filings, ## Options Activity
-    """
-    response_depth = outputs.get("response_depth", "quick")
-    response_text = outputs.get("response_text") or ""
-
-    if response_depth != "deep":
-        return {"key": "response_depth_respected", "score": 1.0, "comment": "Quick mode — sections not required"}
-
-    required_sections = [
-        "## Price Action",
-        "## News & Catalysts",
-        "## Market Sentiment",
-        "## SEC Filings",
-        "## Options Activity",
-    ]
-    missing = [s for s in required_sections if s not in response_text]
-    score = 1.0 if not missing else 0.0
-    return {
-        "key": "response_depth_respected",
-        "score": score,
-        "comment": f"Missing sections: {missing}" if missing else "All 5 sections present",
-    }
-
-
 def intent_accuracy(outputs: dict, reference_outputs: dict) -> dict:
     """
     Assert output intent matches the expected intent in the dataset example.
@@ -155,9 +124,19 @@ def source_attribution(outputs: dict, reference_outputs: dict) -> dict:
 def hallucination(outputs: dict, reference_outputs: dict) -> dict:
     """
     LLM-as-judge: checks whether response_text makes claims not supported
-    by synthesizer_context (the actual data the model was given).
+    by synthesizer_context (the full synthesis prompt including the data block
+    the model was given).
 
-    Score: 1.0 = no hallucination detected, 0.0 = hallucination detected.
+    Uses llama-3.3-70b-versatile as judge — a different model family from the
+    synthesizer (Gemini 2.5 Flash), ensuring independent evaluation.
+
+    Score scale: judge outputs integer 1–5, normalized to 0.0–1.0 in Python.
+      5 → 1.0  — Clean: every claim traceable to source data
+      4 → 0.75 — Minor: slight paraphrasing, no invented facts
+      3 → 0.5  — Moderate: one unverifiable claim or causal assertion
+      2 → 0.25 — Significant: multiple unsupported claims or one fabrication
+      1 → 0.0  — Critical: invented numbers, non-existent quotes, training-data gap-filling
+
     Returns None if synthesizer_context or response_text is missing.
     """
     import json
@@ -170,21 +149,67 @@ def hallucination(outputs: dict, reference_outputs: dict) -> dict:
     if not response_text or not context:
         return {"key": "hallucination", "score": None, "comment": "Missing response_text or synthesizer_context"}
 
-    judge = ChatGroq(model="llama-3.1-8b-instant", temperature=0, max_tokens=256)
+    judge = ChatGroq(model="llama-3.3-70b-versatile", temperature=0, max_tokens=1024)
 
-    prompt = f"""You are evaluating whether an AI response hallucinates facts not present in the source data.
+    prompt = f"""You are an expert financial AI evaluator auditing a stock analysis agent for hallucinations.
 
-<source_data>
-{context[:3000]}
-</source_data>
+## Background
 
-<response>
-{response_text[:2000]}
-</response>
+This agent retrieves financial data — price metrics, news articles, Reddit sentiment, SEC filing excerpts, and options data — then passes it to an LLM with an explicit rule: "Only cite facts present in the DATA block. Do not fill gaps from training knowledge."
 
-Does the response make any specific factual claims (numbers, dates, events, quotes) that are NOT supported by the source data above?
+You will receive the SOURCE DATA (the exact data block the model was given) and the RESPONSE it produced. Your job is to identify any specific factual claims in the RESPONSE that are not supported by the SOURCE DATA.
 
-Reply with JSON only: {{"hallucination": true/false, "reason": "one sentence"}}"""
+## High-Risk Claim Types to Check
+
+**Financial figures** — prices, percentages, volumes, dates, earnings numbers. A close-but-wrong number is still a fabrication (e.g., response says "fell 8.3%" but data says 7.1%).
+
+**Causal claims** — "X happened because of Y." The data must explicitly connect X and Y. Temporal proximity in the data does not justify causal language in the response.
+
+**Quotes and headlines** — if a specific news headline or management quote is cited, it must appear verbatim or near-verbatim in the news articles or SEC filing excerpts in the data.
+
+**Training-data gap-filling** — if the data shows a source was unavailable (e.g., "News Articles: Unavailable — ..."), the response must not reference specific events from that dimension. This is the most serious failure mode.
+
+**Attribution errors** — a claim attributed to a named source (e.g., "Reuters reported...", "the 10-Q states...") must be traceable to that source in the data.
+
+## What Is NOT a Hallucination
+
+- Rounding for readability (7.8% → "roughly 8%"), provided it is not presented as exact
+- Reasonable characterization of a trend the data clearly supports
+- Standard financial framing and analytical language
+- Disclosing that a data source was unavailable (this is correct behavior, not a hallucination)
+- Synthesizing multiple data points into a single coherent observation, when the underlying data supports it
+
+## Scoring Rubric
+
+Score the response on a scale of 1 to 5:
+
+5 — Clean. Every specific claim is directly traceable to the source data. Nothing was invented.
+4 — Minor. Slight rounding or paraphrasing that is not presented as exact, but no invented facts.
+3 — Moderate. One specific claim or causal assertion that cannot be verified against the data.
+2 — Significant. Multiple unverifiable claims, or one clear fabrication (wrong figure, non-existent event).
+1 — Critical. Invented financial figures presented as fact, quotes absent from the data, or gap-filling from training knowledge where the data explicitly marked a source as unavailable.
+
+## Output Format
+
+Respond with JSON only — no explanation outside the JSON:
+{{
+  "score": <integer 1 to 5>,
+  "verdict": <"clean" | "minor" | "moderate" | "significant" | "critical">,
+  "unsupported_claims": [
+    {{"claim": "<exact quote from response>", "issue": "<why this is unsupported by the data>"}}
+  ],
+  "reasoning": "<2-3 sentences summarizing your overall assessment>"
+}}
+
+If no hallucinations are found, unsupported_claims must be an empty list [].
+
+--- SOURCE DATA ---
+{context[:8000]}
+--- END SOURCE DATA ---
+
+--- RESPONSE ---
+{response_text[:3000]}
+--- END RESPONSE ---"""
 
     try:
         result = judge.invoke([HumanMessage(content=prompt)])
@@ -195,11 +220,19 @@ Reply with JSON only: {{"hallucination": true/false, "reason": "one sentence"}}"
                 raw = raw[4:]
             raw = raw.strip()
         parsed = json.loads(raw)
-        detected = parsed.get("hallucination", False)
+        raw_score = int(parsed.get("score", 1))
+        score = round((raw_score - 1) / 4, 2)  # normalize 1–5 → 0.0–1.0
+        verdict = parsed.get("verdict", "")
+        claims = parsed.get("unsupported_claims", [])
+        reasoning = parsed.get("reasoning", "")
+
+        claim_summary = f" | {len(claims)} unsupported claim(s): {claims[0]['claim'][:80]}..." if claims else ""
+        comment = f"verdict={verdict}{claim_summary} | {reasoning}"
+
         return {
             "key": "hallucination",
-            "score": 0.0 if detected else 1.0,
-            "comment": parsed.get("reason", ""),
+            "score": score,
+            "comment": comment,
         }
     except Exception as e:
         return {"key": "hallucination", "score": None, "comment": f"Judge failed: {e}"}
@@ -209,7 +242,6 @@ ALL_EVALUATORS = [
     date_range_accuracy,
     chart_generated_when_requested,
     rag_chunks_retrieved,
-    response_depth_respected,
     intent_accuracy,
     source_attribution,
     hallucination,

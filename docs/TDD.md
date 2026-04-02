@@ -6,7 +6,7 @@
 
 **Status:** In Progress 
 
-**Last Updated:** March 19, 2026
+**Last Updated:** March 29, 2026
 
 **Version:** 1.0
 
@@ -130,13 +130,6 @@ StockInsightState:
       Empty dict if no keys provided.
       Read by: Any node that calls an external API
 
-  response_depth: str
-      Chat profile selected by the user. Either "quick" or "deep".
-      "quick" (default): concise summary, llm_synthesizer (max_tokens=1024)
-      "deep": structured analyst brief with markdown sections, llm_synthesizer_deep (max_tokens=2048)
-      Not Required — nodes use state.get("response_depth", "quick") as fallback.
-      Read by: Node 9
-
   # --- Set by Node 1: Intent Classifier ---
   intent: str
       One of: "stock_analysis", "options_view", "chart_request",
@@ -228,7 +221,7 @@ StockInsightState:
       Read by: Node 9
 
   news_source_used: str
-      Which provider returned the data. "newsapi", "google_rss", or "none"
+      Which provider returned the data. "finnhub", "youcom", "google_rss", or "none"
       Read by: Node 9
 
   news_error: str or None

@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 DATASET_NAME = "stock-insight-agent-baseline"
-EXPERIMENT_NAME = "baseline-post-review"
+EXPERIMENT_NAME = "all-nodes-wired"
 
 
 def run_graph(inputs: dict) -> dict:
@@ -41,7 +41,6 @@ def run_graph(inputs: dict) -> dict:
     state = {
         "user_message": inputs.get("user_message", ""),
         "user_config": inputs.get("user_config", {}),
-        "response_depth": inputs.get("response_depth", "quick"),
         # Pass through any seeded context fields (ticker, dates) from dataset examples
         **{k: v for k, v in inputs.items() if k in ("ticker", "company_name", "start_date", "end_date", "date_context")},
     }
@@ -61,8 +60,10 @@ if __name__ == "__main__":
         evaluators=ALL_EVALUATORS,
         experiment_prefix=EXPERIMENT_NAME,
         description=(
-            "Post-review baseline: Phase 1 bug fixes + Phase 2 improvements merged. "
-            "Compare against baseline-4d729529 for before/after quality delta."
+            "Full pipeline: all 8 nodes wired (intent, ticker, date, price, news, "
+            "reddit, RAG, options). Hallucination evaluator upgraded to llama-3.3-70b "
+            "with graded 1-5 rubric. Compare against baseline-4d729529 for "
+            "pre/post Phase 2-3 quality delta."
         ),
         max_concurrency=1,   # sequential — avoids Groq rate limits
     )

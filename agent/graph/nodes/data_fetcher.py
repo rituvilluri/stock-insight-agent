@@ -21,6 +21,7 @@ import os
 from datetime import datetime, timedelta
 from typing import Optional
 
+import pandas as pd
 import requests
 import yfinance as yf
 
@@ -193,7 +194,6 @@ def _fetch_alpha_vantage(
         if not time_series:
             return None, f"Alpha Vantage API error or rate limit: {data.get('Note') or data.get('Information') or 'unknown'}"
 
-        import pandas as pd
         df = pd.DataFrame.from_dict(time_series, orient="index", dtype=float)
         df.index = pd.to_datetime(df.index)
         df.sort_index(inplace=True)
@@ -270,7 +270,7 @@ def _fetch_analyst_data(ticker: str) -> Optional[dict]:
         strong_buy = buy = hold = sell = strong_sell = None
         try:
             recs = stock.recommendations_summary
-            if recs is not None and isinstance(recs, object) and hasattr(recs, "empty") and not recs.empty:
+            if recs is not None and hasattr(recs, "empty") and not recs.empty:
                 latest = recs.iloc[0]
                 strong_buy = int(latest.get("strongBuy", 0))
                 buy = int(latest.get("buy", 0))

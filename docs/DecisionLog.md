@@ -4,9 +4,9 @@
 
 **Author:** Ritu Villuri
 
-**Status:** 
+**Status:** Active
 
-**Last Updated:** March 17, 2026
+**Last Updated:** March 29, 2026
 
 ---
 
@@ -247,23 +247,23 @@ The search strategy uses semantic search with metadata pre-filtering (by ticker 
 
 ## Decision 12: Two-Model LLM Strategy
 
-**Date:** March 2026 **Status:** Accepted
+**Date:** March 2026 **Status:** Accepted (Updated March 29, 2026)
 
-**Decision:** Use two separate LLM configurations: `llm_classifier` (llama-3.1-8b-instant) for structured classification nodes, `llm_synthesizer` (llama-3.3-70b-versatile) for the Response Synthesizer.
+**Decision:** Use two separate LLM configurations: `llm_classifier` (Groq llama-3.1-8b-instant) for structured classification nodes, `llm_synthesizer` (Google Gemini 2.5 Flash with thinking) for the Response Synthesizer.
 
-**Context:** LangSmith trace analysis revealed that the synthesizer is the quality bottleneck. It receives 500–1,000+ prompt tokens of multi-source financial data and must produce a coherent, sourced narrative. The 8B model produced adequate but noticeably shallow output for complex multi-source queries. Classification tasks (intent, ticker, date) are deterministic and structured — they don't benefit from a larger model.
+**Context:** LangSmith trace analysis revealed that the synthesizer is the quality bottleneck. It receives 500–1,000+ prompt tokens of multi-source financial data and must produce a coherent, sourced narrative that connects price action to catalysts — reasoning about causality, not reciting data. The synthesizer prompt was designed around this causality-first principle; a thinking model aligns directly with it. Classification tasks (intent, ticker, date) are deterministic and structured — they don't benefit from a larger or reasoning model.
+
+An intermediate step used Groq llama-3.3-70b-versatile as the synthesizer upgrade, but Groq 70B's token-per-minute limits became a constraint with large news payloads, and its output still tended toward recitation rather than synthesis.
 
 **Options Considered:**
 
 - **Single model (8B) for all nodes:** Simple configuration. Classification quality is fine, but synthesis quality is the ceiling.
-- **Single model (70B) for all nodes:** Better synthesis quality. Rate limits hit faster; classification calls are wasteful at 70B scale.
-- **Two-model split:** Small fast model for classification, large capable model for synthesis.
+- **Groq 70B (llama-3.3-70b-versatile) for synthesizer:** Better than 8B. Same provider (Groq), no new API key. Still recites rather than reasons; token-per-minute limits constrain large data payloads.
+- **Google Gemini 2.5 Flash (thinking) for synthesizer:** Reasoning model with explicit thinking budget. Higher output token ceiling. Different provider — requires GEMINI_API_KEY.
 
-**Choice and Rationale:** Two-model split. Classification nodes return structured JSON with constrained output — the 8B model handles this reliably at lower token cost and higher speed. The synthesizer is the only node that requires genuine reasoning across conflicting signals from multiple data sources. Upgrading only the synthesizer gets the quality improvement where it matters without burning rate limits on classification tasks.
+**Choice and Rationale:** Gemini 2.5 Flash with `thinking_budget=1024`. The thinking budget enables internal chain-of-thought so the model connects data points (price action ↔ news ↔ sentiment ↔ earnings) rather than listing them under headers. `max_output_tokens=4096` allows analyst-quality briefs. Streaming is native via LangChain's Gemini integration. Chainlit's astream_events loop handles Gemini's thinking-phase chunk format (structured content list rather than plain string) with a special handler in app.py.
 
-**Tradeoffs Accepted:** Two model configs to maintain. Groq free tier rate limits apply to each model separately, so the 70B model has tighter per-minute token limits than the 8B. For synthesis tasks with large news payloads, the 70B token/minute limit can be a constraint.
-
----
+**Tradeoffs Accepted:** Two API providers now required (Groq + Google). `GEMINI_API_KEY` is a required env variable. Gemini free tier has its own rate limits (distinct from Groq). Thinking tokens are not streamed to the user — app.py filters them and only streams the final text output. The `llm` legacy alias in llm_setup.py (previously kept for the now-deleted tool_caller.py prototype) was removed.
 
 ## Decision 13: Parallel Data Retrieval via LangGraph Send()
 
@@ -325,3 +325,44 @@ The search strategy uses semantic search with metadata pre-filtering (by ticker 
 8-K and earnings call transcripts added to the RAG corpus because they are the most actionable documents in the SEC EDGAR archive for a trader's time horizon. A 10-K tells you what happened last year; an 8-K tells you what happened this week. Both are free, same pipeline.
 
 **Tradeoffs Accepted:** Node 4 takes on more responsibility than strictly "price data." The enrichment calls are best-effort and non-fatal — if any yfinance call fails, the node writes None to that field and continues. The synthesizer handles None gracefully. Black-Scholes Greeks are slightly less precise than exchange-calculated Greeks due to 15-minute IV delay, but the difference is immaterial for the retrospective analysis use case this agent is designed for.
+
+---
+
+## Decision 16: Google Gemini 2.5 Flash as Response Synthesizer
+
+**Date:** March 2026 **Status:** Accepted
+
+**Decision:** Replace Groq llama-3.3-70b-versatile with Google Gemini 2.5 Flash (thinking model) as the Response Synthesizer LLM.
+
+**Context:** See Decision 12 for full context. This entry records the provider-switch rationale separately from the two-model split rationale. The switch was driven by two specific observations in LangSmith traces: (1) the 70B Groq model produced structured recitations rather than causal narratives even with explicit prompting; (2) Groq 70B token-per-minute limits were being hit on stock_analysis queries with large news payloads (8–10 articles + Reddit posts + filing chunks).
+
+**Options Considered:**
+
+- **Groq 70B (status quo):** No new API key. Faster model selection. Recitation tendency persists; rate-limit ceiling remains.
+- **OpenAI GPT-4o:** Strongest reasoning. Paid. Provider abstraction planned for Phase 5 user-configurable keys; appropriate there, not as the default.
+- **Google Gemini 2.5 Flash (thinking):** Free tier sufficient for development and portfolio demo. `thinking_budget` parameter enables internal chain-of-thought on demand. LangChain `langchain_google_genai` integration supports streaming.
+
+**Choice and Rationale:** Gemini 2.5 Flash. The `thinking_budget=1024` tokens of internal reasoning directly addresses the recitation problem — the model reasons about which data points are causally linked before writing the output. Free tier is adequate for development and demo use. The app.py streaming loop was updated to handle Gemini's thinking-phase content format (list of typed parts vs. plain string chunks from Groq).
+
+**Tradeoffs Accepted:** New required dependency: `GEMINI_API_KEY`. Two distinct API providers now in the critical path. Gemini thinking tokens are invisible to the user (filtered in app.py). Model availability depends on Google's free tier terms.
+
+---
+
+## Decision 17: You.com Search API as News Layer 2
+
+**Date:** March 2026 **Status:** Accepted
+
+**Decision:** Replace Financial Modeling Prep (FMP) with the You.com Search API as the Layer 2 news fallback in news_retriever.py.
+
+**Context:** The news retriever uses a three-layer fallback: Finnhub (primary, ticker-specific) → Layer 2 (broader web search for historical coverage) → Google News RSS (emergency fallback). The original plan used FMP as Layer 2 (250 requests/day free, structured news endpoint). During Phase 3 testing, Google Custom Search JSON API — another candidate — was found to be permanently closed to new customers with no workaround. FMP was re-evaluated and found to have coverage gaps for dates older than 90 days. The You.com Search API was introduced as Layer 2.
+
+**Options Considered:**
+
+- **FMP (original plan):** 250 req/day free, structured JSON. Weak historical coverage beyond 90 days. Limited to news explicitly tagged by FMP's feed.
+- **Google Custom Search JSON API:** Closed to new customers. Not viable.
+- **Bing News Search API:** Limited free tier, restrictive ToS for financial use.
+- **You.com Search API:** Web search index. `freshness=YYYY-MM-DDtoYYYY-MM-DD` parameter for server-side date filtering. `results.news[]` returns title, description, url, page_age. Free tier includes $100 credits. Better historical coverage than FMP for older date ranges.
+
+**Choice and Rationale:** You.com Search API. The `freshness` parameter makes server-side date filtering reliable for the Layer 2 use case (historical queries beyond Finnhub's range). Coverage is broader than FMP's feed-based approach because it indexes the web. $100 free credits are sufficient for development and demo use.
+
+**Tradeoffs Accepted:** New env variable: `YOUCOM_API_KEY`. Credits are finite (not unlimited free tier); monitor usage during sustained testing. Source attribution in responses shows "youcom" as the provider when Layer 2 is used. The `news_source_used` state field now takes values "finnhub", "youcom", "google_rss", or "none" — updated in state.py comments and TDD.md.
