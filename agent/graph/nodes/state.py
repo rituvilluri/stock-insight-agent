@@ -47,9 +47,9 @@ class AgentState(TypedDict, total=False):
     # Never modified after it is set.
 
     user_config: Required[dict]
-    # Optional API keys the user has provided, e.g. {"newsapi_key": "abc"}.
+    # Optional API keys the user has provided, e.g. {"finnhub_key": "abc"}.
     # Empty dict {} if the user provided nothing (so nodes can always do
-    # `state["user_config"].get("newsapi_key")` safely without a KeyError).
+    # `state["user_config"].get("finnhub_key")` safely without a KeyError).
     # Read by: any node that calls an external paid API.
     # Never modified after it is set.
 
@@ -63,7 +63,7 @@ class AgentState(TypedDict, total=False):
     #   "stock_analysis"  — what happened with a stock during a time period
     #   "options_view"    — options chain / put-call ratio
     #   "chart_request"   — user primarily wants a visual chart
-    #   "general_lookup"  — basic price performance, no deep analysis
+    #   "general_lookup"  — basic price performance, brief summary
     #   "unknown"         — doesn't relate to stocks, or too ambiguous
     # Read by: conditional routing edges after Node 3.
 
@@ -197,7 +197,7 @@ class AgentState(TypedDict, total=False):
     # Read by: Node 9.
 
     news_source_used: Optional[str]
-    # Which news provider returned data: "newsapi", "google_rss", or "none".
+    # Which news provider returned data: "finnhub", "fmp", "google_rss", or "none".
     # Separate from news_error so Node 9 can cite the source even when the
     # call succeeded.
     # Read by: Node 9.
@@ -308,13 +308,3 @@ class AgentState(TypedDict, total=False):
     synthesizer_error: Optional[str]
     # Written by Node 9 if response generation fails. None on success.
 
-    # -------------------------------------------------------------------------
-    # Chat profile — set by app.py from the Chainlit chat profile selection
-    # -------------------------------------------------------------------------
-
-    response_depth: str
-    # "quick" or "deep". Controls synthesizer prompt style and token budget.
-    # "quick" → current concise prompt, max_tokens=1024 (default)
-    # "deep"  → structured analyst brief, max_tokens=2048
-    # Not marked Required — nodes use state.get("response_depth", "quick").
-    # Set by app.py before the graph starts running.

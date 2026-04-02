@@ -5,20 +5,24 @@ Reads:  ticker, company_name, start_date, end_date, user_config,
         include_current_snapshot
 Writes: news_articles, news_source_used, news_error
 
-Two-layer architecture, tried in order:
-  1. NewsAPI — REST API, date-filtered, structured JSON response.
-               Key sourced from user_config["newsapi_key"] first,
-               then NEWSAPI_KEY env var. Falls back to Layer 2 if the
-               key is absent, the tier doesn't cover the date range
-               (free tier: last 30 days only), or the call fails.
-  2. Google News RSS — No API key needed. Constructs a search URL and
-                       parses the RSS feed with feedparser.
+Three-layer architecture, tried in order:
+  1. Finnhub — REST API, ticker-filtered, date-ranged. Key from
+               user_config["finnhub_key"] or FINNHUB_API_KEY env var.
+               Free tier: 60 calls/minute, ~2 years of history.
+               Falls back to Layer 2 on missing key, empty result, or failure.
+  2. You.com Search API — Web search index with date-range filtering via
+               freshness parameter (YYYY-MM-DDtoYYYY-MM-DD). Key from
+               YOUCOM_API_KEY env var. Free tier: $100 credits.
+               Returns results.news array. Falls back to Layer 3 on missing
+               key or failure.
+  3. Google News RSS — No API key needed. Best-effort date filtering via
+               post-parse range check. Emergency fallback only.
 
 If include_current_snapshot is True, a second fetch for the last 7 days
-is appended to news_articles alongside the historical set.
+is appended to news_articles alongside the historical set (deduped by URL).
 
 Each article dict contains:
-  title, source_name, published_date (ISO string), url, snippet
+  title, source_name, published_date (ISO string YYYY-MM-DD), url, snippet
 """
 
 import logging
@@ -27,8 +31,7 @@ from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
 import feedparser
-import yfinance as yf
-from newsapi import NewsApiClient
+import requests
 
 from agent.graph.nodes.state import AgentState
 
@@ -37,47 +40,28 @@ logger = logging.getLogger(__name__)
 _MAX_ARTICLES = 10
 _CURRENT_SNAPSHOT_DAYS = 7
 _GOOGLE_NEWS_RSS = "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
+_FINNHUB_NEWS_URL = "https://finnhub.io/api/v1/company-news"
+_YOUCOM_SEARCH_URL = "https://ydc-index.io/v1/search"
 
 
 # ---------------------------------------------------------------------------
-# Helpers
+# Key helpers
 # ---------------------------------------------------------------------------
 
-def _get_newsapi_key(user_config: dict) -> str | None:
-    return user_config.get("newsapi_key") or os.getenv("NEWSAPI_KEY")
+def _get_finnhub_key(user_config: dict) -> str | None:
+    return user_config.get("finnhub_key") or os.getenv("FINNHUB_API_KEY")
 
 
-def _get_sector_keywords(ticker: str) -> list[str]:
-    """
-    Fetch sector/industry from yfinance and return relevant macro search terms.
-    Returns an empty list on failure or when no useful terms are known.
-    Cached implicitly by yfinance's requests session within a single process.
-    """
-    try:
-        info = yf.Ticker(ticker).info
-        industry = (info.get("industry") or "").lower()
-        sector = (info.get("sector") or "").lower()
+def _get_youcom_key(user_config: dict) -> str | None:
+    return user_config.get("youcom_api_key") or os.getenv("YOUCOM_API_KEY")
 
-        keywords = []
-        if any(w in industry for w in ["shipping", "tanker", "marine"]):
-            keywords = ["tanker rates", "shipping sanctions", "Red Sea shipping"]
-        elif any(w in industry for w in ["oil", "gas", "energy"]):
-            keywords = ["oil prices", "energy sector"]
-        elif any(w in industry for w in ["semiconductor", "chip"]):
-            keywords = ["semiconductor supply", "chip demand"]
-        elif any(w in sector for w in ["technology"]):
-            keywords = ["tech sector"]
-        elif any(w in sector for w in ["financial"]):
-            keywords = ["interest rates", "banking sector"]
 
-        return keywords
-    except Exception as e:
-        logger.debug("sector keyword lookup failed for %s: %s", ticker, e)
-        return []
-
+# ---------------------------------------------------------------------------
+# Query builder (shared)
+# ---------------------------------------------------------------------------
 
 def _build_query(ticker: str, company_name: str) -> str:
-    """Build a search query that matches ticker OR company name."""
+    """Build a search query that matches ticker OR company name (for RSS)."""
     parts = []
     if ticker:
         parts.append(ticker)
@@ -86,26 +70,68 @@ def _build_query(ticker: str, company_name: str) -> str:
     return " OR ".join(parts) if parts else ticker
 
 
+# ---------------------------------------------------------------------------
+# Layer 1: Finnhub
+# ---------------------------------------------------------------------------
 
-def _parse_newsapi_articles(articles: list) -> list:
-    """Normalise NewsAPI article dicts to the project schema."""
-    result = []
-    for a in articles:
-        published = a.get("publishedAt", "")
-        if published:
-            # Strip trailing 'Z' and reformat to YYYY-MM-DD
-            published = published[:10]
-        result.append({
-            "title": a.get("title") or "",
-            "source_name": (a.get("source") or {}).get("name") or "",
-            "published_date": published,
-            "url": a.get("url") or "",
-            "snippet": (a.get("description") or a.get("content") or "")[:300],
-        })
-    return result
+def _fetch_finnhub(
+    ticker: str,
+    start_date: str,
+    end_date: str,
+    api_key: str,
+) -> list | None:
+    """
+    Query Finnhub /company-news endpoint.
+    Returns a normalised article list on success, None on failure or empty.
+    """
+    try:
+        resp = requests.get(
+            _FINNHUB_NEWS_URL,
+            params={
+                "symbol": ticker,
+                "from": start_date,
+                "to": end_date,
+                "token": api_key,
+            },
+            timeout=10,
+        )
+        if resp.status_code != 200:
+            logger.warning("Finnhub returned HTTP %s", resp.status_code)
+            return None
+
+        data = resp.json()
+        if not isinstance(data, list) or not data:
+            logger.info("Finnhub returned 0 articles for %s", ticker)
+            return None
+
+        articles = []
+        for item in data[:_MAX_ARTICLES]:
+            # datetime is a Unix timestamp
+            try:
+                published = datetime.fromtimestamp(item["datetime"], tz=datetime.now().astimezone().tzinfo).strftime("%Y-%m-%d")
+            except (KeyError, TypeError, OSError):
+                published = ""
+
+            articles.append({
+                "title": item.get("headline") or "",
+                "source_name": item.get("source") or "",
+                "published_date": published,
+                "url": item.get("url") or "",
+                "snippet": (item.get("summary") or "")[:300],
+            })
+
+        return articles if articles else None
+
+    except Exception as e:
+        logger.warning("Finnhub fetch failed: %s", e)
+        return None
 
 
-def _fetch_newsapi(
+# ---------------------------------------------------------------------------
+# Layer 2: You.com Search API
+# ---------------------------------------------------------------------------
+
+def _fetch_youcom(
     ticker: str,
     company_name: str,
     start_date: str,
@@ -113,66 +139,73 @@ def _fetch_newsapi(
     api_key: str,
 ) -> list | None:
     """
-    Query the NewsAPI 'everything' endpoint.
-    Returns a normalised article list on success, None on failure or empty.
+    Query the You.com Search API for news articles in the given date range.
+
+    Uses the freshness parameter (YYYY-MM-DDtoYYYY-MM-DD) for server-side
+    date filtering. Returns results.news from the response.
     """
+    name_part = f'"{company_name}"' if company_name and company_name.lower() != ticker.lower() else ""
+    query = f"{ticker} {name_part} stock news".strip()
+    freshness = f"{start_date}to{end_date}"
+
     try:
-        client = NewsApiClient(api_key=api_key)
-        query = _build_query(ticker, company_name)
-        response = client.get_everything(
-            q=query,
-            from_param=start_date,
-            to=end_date,
-            language="en",
-            sort_by="relevancy",
-            page_size=_MAX_ARTICLES,
+        resp = requests.get(
+            _YOUCOM_SEARCH_URL,
+            headers={"X-API-Key": api_key},
+            params={
+                "query": query,
+                "freshness": freshness,
+                "count": _MAX_ARTICLES,
+            },
+            timeout=10,
         )
-        if response.get("status") == "error":
-            error_code = response.get("code", "")
-            message = response.get("message", "")
-            if error_code == "parameterInvalid":
-                logger.warning(
-                    "NewsAPI: date range [%s → %s] is outside free tier coverage (last 30 days). "
-                    "Upgrade to a paid plan for historical access.",
-                    start_date, end_date,
-                )
-            else:
-                logger.warning("NewsAPI returned error status: %s", message)
-            return None
-        if response.get("status") != "ok":
-            logger.warning("NewsAPI returned unexpected status: %s", response.get("status"))
+        if resp.status_code != 200:
+            logger.warning("You.com returned HTTP %s", resp.status_code)
             return None
 
-        articles = response.get("articles") or []
-        if not articles:
-            logger.info("NewsAPI returned 0 articles for %s", query)
+        news_items = (resp.json().get("results") or {}).get("news") or []
+        if not news_items:
+            logger.info("You.com returned 0 news results for %s", ticker)
             return None
 
-        return _parse_newsapi_articles(articles)
+        articles = []
+        for item in news_items:
+            # page_age is ISO 8601 datetime — trim to YYYY-MM-DD
+            page_age = item.get("page_age") or ""
+            published_date = page_age[:10] if len(page_age) >= 10 else ""
+
+            articles.append({
+                "title": item.get("title") or "",
+                "source_name": item.get("url", "").split("/")[2] if item.get("url") else "",
+                "published_date": published_date,
+                "url": item.get("url") or "",
+                "snippet": (item.get("description") or "")[:300],
+            })
+
+        logger.info("You.com → %d news articles for %s", len(articles), ticker)
+        return articles if articles else None
 
     except Exception as e:
-        logger.warning("NewsAPI call failed: %s", e)
+        logger.warning("You.com fetch failed: %s", e)
         return None
 
+
+# ---------------------------------------------------------------------------
+# Layer 3: Google News RSS (emergency fallback)
+# ---------------------------------------------------------------------------
 
 def _fetch_google_rss(
     ticker: str,
     company_name: str,
     start_date: str,
     end_date: str,
-    extra_terms: list[str] | None = None,
 ) -> list | None:
     """
-    Query Google News RSS.
-    Date filtering is best-effort: Google RSS doesn't support exact range
-    filtering so we filter parsed entries by published date.
-    extra_terms: optional sector/macro keywords appended to broaden context.
+    Query Google News RSS. Date filtering is best-effort (post-parse range check).
     Returns a normalised article list on success, None on failure or empty.
     """
     try:
         query = _build_query(ticker, company_name)
-        if extra_terms:
-            query = f"{query} OR {extra_terms[0]}"
         url = _GOOGLE_NEWS_RSS.format(query=quote_plus(query))
         feed = feedparser.parse(url)
 
@@ -192,15 +225,12 @@ def _fetch_google_rss(
         skipped_out_of_range = 0
 
         for entry in feed.entries[:_MAX_ARTICLES * 2]:
-            # feedparser normalises published_parsed to a time.struct_time in UTC
             published_dt = None
             if entry.get("published_parsed"):
                 published_dt = datetime(*entry.published_parsed[:6])
 
-            # Date-range filter
             if start_dt and end_dt and published_dt:
                 if not (start_dt <= published_dt <= end_dt):
-                    skipped_out_of_range += 1
                     continue
 
             published_str = published_dt.strftime("%Y-%m-%d") if published_dt else ""
@@ -216,28 +246,8 @@ def _fetch_google_rss(
             if len(articles) >= _MAX_ARTICLES:
                 break
 
-        logger.info(
-            "Google RSS: %d entries fetched, %d passed date filter [%s → %s], %d skipped out of range",
-            total_entries, len(articles), start_date, end_date, skipped_out_of_range,
-        )
-
         if not articles:
-            # Check if the range is likely outside RSS coverage (Google RSS typically
-            # covers only the last 30 days for most queries)
-            if start_dt:
-                days_ago = (datetime.now() - start_dt).days
-                if days_ago > 30:
-                    logger.warning(
-                        "Google RSS 0 articles: query range starts %d days ago — "
-                        "RSS likely has no coverage for dates older than ~30 days. "
-                        "All %d fetched entries were outside [%s → %s].",
-                        days_ago, total_entries, start_date, end_date,
-                    )
-                else:
-                    logger.info(
-                        "Google RSS 0 articles in range [%s → %s]: no matching entries in feed",
-                        start_date, end_date,
-                    )
+            logger.info("Google RSS returned 0 articles in range for %s", query)
             return None
 
         return articles
@@ -248,19 +258,91 @@ def _fetch_google_rss(
 
 
 # ---------------------------------------------------------------------------
+# Relevance filter — keep only articles mentioning the stock
+# ---------------------------------------------------------------------------
+
+def _filter_relevant_articles(
+    articles: list,
+    ticker: str,
+    company_name: str,
+) -> list:
+    """
+    Remove articles that don't mention the stock in their title or snippet.
+
+    Finnhub's /company-news endpoint tags articles at the sector level, not
+    strictly at the company level — so queries for NVDA regularly return
+    articles about Tesla, Palantir, Camping World, etc.  This filter ensures
+    only articles with at least one mention of the ticker OR the company name
+    (case-insensitive) pass through.
+
+    We check title first (higher signal) then snippet (lower signal but still
+    acceptable — many articles mention the company briefly in the lede).
+    Returns the filtered list; never returns None.
+    """
+    if not articles:
+        return []
+
+    ticker_lower = ticker.lower()
+    # Strip common suffixes for partial match: "NVIDIA Corporation" → also match "NVIDIA"
+    company_lower = company_name.lower() if company_name else ticker_lower
+    # Use the first word of the company name as a shorter match anchor
+    # e.g. "Alphabet (Google)" → "alphabet", "NVIDIA" → "nvidia"
+    company_primary = company_lower.split()[0] if company_lower else ticker_lower
+
+    relevant = []
+    for article in articles:
+        title = (article.get("title") or "").lower()
+        snippet = (article.get("snippet") or "").lower()
+        haystack = title + " " + snippet
+        if ticker_lower in haystack or company_primary in haystack:
+            relevant.append(article)
+
+    return relevant
+
+
+# ---------------------------------------------------------------------------
+# Shared fetch orchestrator
+# ---------------------------------------------------------------------------
+
+def _fetch_articles(
+    ticker: str,
+    company_name: str,
+    start_date: str,
+    end_date: str,
+    finnhub_key: str | None,
+    youcom_key: str | None,
+) -> tuple[list | None, str]:
+    """
+    Try each layer in order. Returns (articles, source_label).
+    """
+    if finnhub_key:
+        articles = _fetch_finnhub(ticker, start_date, end_date, finnhub_key)
+        if articles is not None:
+            logger.info("_fetch_articles [finnhub] → %d articles", len(articles))
+            return articles, "finnhub"
+
+    if youcom_key:
+        articles = _fetch_youcom(ticker, company_name, start_date, end_date, youcom_key)
+        if articles is not None:
+            logger.info("_fetch_articles [youcom] → %d articles", len(articles))
+            return articles, "youcom"
+
+    articles = _fetch_google_rss(ticker, company_name, start_date, end_date)
+    if articles is not None:
+        logger.info("_fetch_articles [google_rss] → %d articles", len(articles))
+        return articles, "google_rss"
+
+    return None, "none"
+
+
+# ---------------------------------------------------------------------------
 # Node function
 # ---------------------------------------------------------------------------
 
-# LangSmith observation (2026-03-19): median latency ~1,014ms across 1 run (only
-# full stock_analysis trace in project). Second slowest node in the graph.
-# Primary bottleneck: Google News RSS HTTP round-trip (~1s). NewsAPI path would
-# be faster but NEWSAPI_KEY is absent in this env, so RSS fallback is always used.
-# Error rate: 0% across all runs — RSS fallback absorbs NewsAPI auth failures;
-# no run has ever written a non-null news_error in the current trace set.
 def retrieve_news(state: AgentState) -> AgentState:
     """
     Fetch news articles for the given ticker and date range.
-    Tries NewsAPI first; falls back to Google News RSS.
+    Tries Finnhub → FMP → Google RSS in order.
     Appends current-snapshot articles if include_current_snapshot is True.
     """
     ticker = state.get("ticker", "")
@@ -271,60 +353,45 @@ def retrieve_news(state: AgentState) -> AgentState:
     include_current = state.get("include_current_snapshot", False)
 
     try:
-        api_key = _get_newsapi_key(user_config)
-        articles = None
-        source_used = "none"
+        finnhub_key = _get_finnhub_key(user_config)
+        youcom_key = _get_youcom_key(user_config)
 
-        # Layer 1 — NewsAPI
-        if api_key:
-            articles = _fetch_newsapi(ticker, company_name, start_date, end_date, api_key)
-            if articles is not None:
-                source_used = "newsapi"
-                logger.info("retrieve_news [newsapi] → %d articles", len(articles))
-
-        # Layer 2 — Google News RSS fallback (enriched with sector context)
-        if articles is None:
-            sector_terms = _get_sector_keywords(ticker)
-            articles = _fetch_google_rss(ticker, company_name, start_date, end_date, extra_terms=sector_terms)
-            if articles is not None:
-                source_used = "google_rss"
-                logger.info("retrieve_news [google_rss] → %d articles", len(articles))
+        articles, source_used = _fetch_articles(
+            ticker, company_name, start_date, end_date, finnhub_key, youcom_key
+        )
 
         if articles is None:
             articles = []
-            logger.warning("retrieve_news: both sources returned no articles")
+            logger.warning("retrieve_news: all sources returned no articles")
+
+        # Filter to only articles that mention this stock
+        articles = _filter_relevant_articles(articles, ticker, company_name)
+        logger.info("retrieve_news: %d relevant articles after filter", len(articles))
 
         # Current snapshot — append last 7 days if requested
         if include_current:
             today = datetime.now().strftime("%Y-%m-%d")
             snapshot_start = (datetime.now() - timedelta(days=_CURRENT_SNAPSHOT_DAYS)).strftime("%Y-%m-%d")
-            snapshot_articles = None
 
-            if api_key:
-                snapshot_articles = _fetch_newsapi(ticker, company_name, snapshot_start, today, api_key)
-            if snapshot_articles is None:
-                snapshot_articles = _fetch_google_rss(ticker, company_name, snapshot_start, today)
+            snapshot_articles, _ = _fetch_articles(
+                ticker, company_name, snapshot_start, today, finnhub_key, youcom_key
+            )
 
             if snapshot_articles:
-                # Avoid duplicates by URL
+                snapshot_articles = _filter_relevant_articles(
+                    snapshot_articles, ticker, company_name
+                )
                 existing_urls = {a["url"] for a in articles}
                 for a in snapshot_articles:
                     if a["url"] not in existing_urls:
                         articles.append(a)
                 logger.info(
-                    "retrieve_news: appended %d current-snapshot articles",
+                    "retrieve_news: appended %d current-snapshot articles after filter",
                     len(snapshot_articles),
                 )
 
-        logger.info(
-            "news_retriever metadata — articles_found=%d source_used=%s range=[%s → %s]",
-            len(articles) if articles else 0,
-            source_used,
-            start_date,
-            end_date,
-        )
         return {
-            "news_articles": articles or None,
+            "news_articles": articles if articles else None,
             "news_source_used": source_used,
             "news_error": None,
         }

@@ -13,57 +13,61 @@ Single-agent LangGraph architecture. NOT multi-agent.
 ## Documentation (read before implementing anything)
 - docs/TDD.md: Source of truth for architecture, node specs, state schema, routing logic
 - docs/PRD.md: Source of truth for feature scope and acceptance criteria
-- docs/DecisionLog.md: 11 ADR-format architectural decisions
+- docs/DecisionLog.md: 17 ADR-format architectural decisions
 
 ## Current Codebase State
-Phase 1 rebuild in progress. Do not treat existing prototype files as sacred.
+All Phase 1–4 nodes are complete and wired into the workflow. The codebase is in active eval and improvement mode (phase3/testing-langsmith branch).
 
-Phase 1 nodes completed:
-- agent/graph/nodes/state.py: ✅ AgentState TypedDict (28 fields, all nodes documented)
-
-Prototype files (will be replaced, do not modify):
-- agent/graph/nodes/tool_caller.py: monolithic god-node; also contains inline chart logic
-- agent/graph/edges/decision_router.py: routes to END if last message is AIMessage; duplicates AgentState
-- agent/graph/workflow.py: single-node graph, tool_caller + conditional edge to END
-- app/chainlit/app.py: Chainlit UI; detects PLOTLY_JSON: prefix for chart rendering
-- tools/stockprice/stock_analyzer.py: yfinance primary, Alpha Vantage fallback
-- tools/date/date_parser_tool.py: regex-based relative date parsing
-- tools/news/news_scraper.py: RSS-based scraper; not wired into graph
-
-LLM config (llm/llm_setup.py) — needs two configs during rebuild:
-- llm_classifier: temperature=0, max_tokens=256 (intent, ticker, date nodes — structured JSON output)
-- llm_synthesizer: temperature=0.3, max_tokens=1024 (response_synthesizer — narrative output)
-- AgentState duplication in tool_caller.py and decision_router.py is resolved; both will import from state.py
-
-## Build Sequence (Phase 1 - current focus)
-Read docs/TDD.md for full node specs before implementing any step.
+## Build Sequence (completed through Phase 4)
+Read docs/TDD.md for full node specs before implementing any new node.
 Done when: all tests in tests/test_<node>.py pass and the node is committed.
 
-1. ✅ agent/graph/nodes/state.py (AgentState TypedDict, all fields) — committed
-2. ✅ agent/graph/nodes/intent_classifier.py + tests/test_intent_classifier.py — committed
-3. ✅ agent/graph/nodes/ticker_resolver.py + tests/test_ticker_resolver.py — committed
-4. ✅ agent/graph/nodes/date_parser.py + tests/test_date_parser.py — committed
-5. ✅ agent/graph/nodes/data_fetcher.py + tests/test_data_fetcher.py — committed
-6. ✅ agent/graph/nodes/chart_generator.py + tests/test_chart_generator.py — committed
-7. ✅ agent/graph/nodes/response_synthesizer.py + tests/test_response_synthesizer.py — committed
-8. ✅ workflow.py rebuild (wire all Phase 1 nodes with conditional edges) — committed
-9. ✅ app/chainlit/app.py update (reads response_text/chart_data from state) — committed
+### Phase 1: Core Foundation ✅
+1. ✅ agent/graph/nodes/state.py (AgentState TypedDict, all fields)
+2. ✅ agent/graph/nodes/intent_classifier.py + tests/test_intent_classifier.py
+3. ✅ agent/graph/nodes/ticker_resolver.py + tests/test_ticker_resolver.py
+4. ✅ agent/graph/nodes/date_parser.py + tests/test_date_parser.py
+5. ✅ agent/graph/nodes/data_fetcher.py + tests/test_data_fetcher.py
+6. ✅ agent/graph/nodes/chart_generator.py + tests/test_chart_generator.py
+7. ✅ agent/graph/nodes/response_synthesizer.py + tests/test_response_synthesizer.py
+8. ✅ agent/graph/workflow.py (all nodes wired with conditional edges)
+9. ✅ app/chainlit/app.py (streaming via astream_events, Gemini thinking-chunk handling)
 10. ✅ LangSmith tracing (LANGCHAIN_TRACING_V2, LANGCHAIN_PROJECT set in .env)
 
-Phase 2 (in progress):
-- ✅ Session context memory (app.py + date_parser.py guard) — committed
-- ⬜ Node 5: news_retriever.py + tests/test_news_retriever.py
-- ✅ Node 6: reddit_sentiment.py + tests/test_reddit_sentiment.py — committed (credentials pending)
-- ✅ workflow.py update (Nodes 5 and 6 wired)
+### Phase 2: Multi-Source Intelligence ✅
+- ✅ Session context memory (app.py + date_parser.py guard)
+- ✅ Node 5: news_retriever.py + tests/test_news_retriever.py (Finnhub → You.com → Google RSS)
+- ✅ Node 6: reddit_sentiment.py + tests/test_reddit_sentiment.py
+- ✅ workflow.py updated (Nodes 5 and 6 wired; parallel fan-out via Send())
 
-Phase 3: rag_pipeline with ChromaDB
+### Phase 3: RAG Pipeline ✅
+- ✅ Node 7: rag_retriever.py + tests/test_rag_retriever.py
+  - SEC EDGAR on-demand ingestion (10-K, 10-Q; 8-K deferred to next iteration)
+  - ChromaDB embedded mode (data/vector_store), Google Gemini embeddings
+  - Wired into stock_analysis fan-out alongside nodes 5 and 6
+
+### Phase 4: Options + Enrichment ✅
+- ✅ Node 8: options_analyzer.py + tests/test_options_analyzer.py
+  - Black-Scholes Greeks (stdlib only), Max Pain, put/call ratio, top-volume strikes
+- ✅ Node 4 enrichments: analyst_data, short_interest, next_earnings_date, days_until_earnings
+
+### Phase 5: Deployment (upcoming)
+- ⬜ Docker containerization
+- ⬜ Azure deployment + GitHub Actions CI/CD
+- ⬜ ChromaDB Cloud migration (1GB free tier, same API)
+
+## LLM Config (llm/llm_setup.py)
+- `llm_classifier`: Groq `llama-3.1-8b-instant`, temperature=0, max_tokens=256
+  - Used by: Intent Classifier, Ticker Resolver, Date Parser (structured JSON output)
+- `llm_synthesizer`: Google Gemini 2.5 Flash, temperature=0.3, max_output_tokens=4096, thinking_budget=1024
+  - Used by: Response Synthesizer (narrative synthesis across multi-source data)
+  - Streaming enabled; Chainlit handles thinking-phase chunk format from Gemini
 
 ## Rules
 - Read docs/TDD.md before implementing any node
 - One node per session; write unit tests alongside each node
 - Do NOT touch workflow.py while implementing individual nodes
-- Do NOT touch app/chainlit/app.py until workflow.py is rebuilt
-- Commit after each node passes tests (no Co-Authored-By in commit messages)
+- Commit after each node passes tests (no Co-Authored-By in commit messages or PRs)
 - No LangChain Tool wrappers; use direct Python function calls
 - No print statements in node files; use logging
 - All nodes must write to their *_error state field on failure
@@ -98,22 +102,35 @@ PYTHONPATH=. pytest tests/
 # Run a single node's tests
 PYTHONPATH=. pytest tests/test_intent_classifier.py -v
 
-# Create tests directory (one-time setup before Step 2)
-mkdir -p tests && touch tests/__init__.py
+# Run LangSmith experiment
+PYTHONPATH=. python tests/evaluators/run_experiment.py
 ```
+
+## LangSmith Experiment Naming
+Before running `run_experiment.py`, always update `EXPERIMENT_NAME` in that file to a descriptive name reflecting what changed. Format: `<what-changed>` (kebab-case, no version numbers).
+
+Examples:
+- `post-intent-label-fix`
+- `post-rag-threshold-tuning`
+- `vertex-claude-synthesizer-trial`
+- `post-hallucination-prompt-update`
+
+Never run an experiment with the stale name from the previous run. A good name makes the LangSmith experiment list readable without opening each one.
 
 ## Environment Variables (.env)
 ```
-GROQ_API_KEY=                    # Required
-ALPHA_VANTAGE_API_KEY=           # Optional fallback
-NEWSAPI_KEY=                     # Phase 2 Node 5; Google RSS fallback used if absent
-REDDIT_CLIENT_ID=                # Phase 2 Node 6
-REDDIT_CLIENT_SECRET=            # Phase 2 Node 6
-REDDIT_USER_AGENT=stock-insight-agent/1.0  # Phase 2 Node 6
-CHROMA_PERSIST_DIR=data/vector_store   # Phase 3, local ChromaDB
-LANGSMITH_API_KEY=               # Phase 1 step 11
-LANGCHAIN_TRACING_V2=true        # Phase 1 step 11
-LANGCHAIN_PROJECT=stock-insight-agent  # Phase 1 step 11
+GROQ_API_KEY=                    # Required — llm_classifier (llama-3.1-8b-instant)
+GEMINI_API_KEY=                  # Required — llm_synthesizer (Gemini 2.5 Flash) + RAG embeddings
+ALPHA_VANTAGE_API_KEY=           # Optional — fallback for stock price data
+FINNHUB_API_KEY=                 # Node 5 Layer 1 — primary news (60 calls/min free, ~2yr history)
+YOUCOM_API_KEY=                  # Node 5 Layer 2 — You.com Search API (fallback when Finnhub misses)
+REDDIT_CLIENT_ID=                # Node 6
+REDDIT_CLIENT_SECRET=            # Node 6
+REDDIT_USER_AGENT=stock-insight-agent/1.0  # Node 6
+CHROMA_PERSIST_DIR=data/vector_store       # Node 7 — local ChromaDB (migrates to Cloud at Phase 5)
+LANGSMITH_API_KEY=               # LangSmith tracing + evals
+LANGCHAIN_TRACING_V2=true        # LangSmith tracing
+LANGCHAIN_PROJECT=stock-insight-agent      # LangSmith project name
 ```
 
 ## Git Commit Format
@@ -122,9 +139,10 @@ feat: implement <node_name> node
 refactor: migrate <tool> into <node_name> node
 test: add tests for <node_name>
 fix: <what was broken>
-chore: add LangSmith tracing
+chore: <housekeeping>
 ```
 
 ## Tech Stack
-Python 3.11+, LangGraph, Chainlit, Groq (llama-3.1-8b-instant),
-yfinance, Alpha Vantage (fallback), ChromaDB (Phase 3), LangSmith, pytest
+Python 3.11+, LangGraph, Chainlit, Groq (llama-3.1-8b-instant classifier),
+Google Gemini 2.5 Flash (synthesizer + embeddings), yfinance, Alpha Vantage (fallback),
+ChromaDB (Phase 3 RAG), LangSmith, pytest

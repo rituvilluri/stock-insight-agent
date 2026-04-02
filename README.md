@@ -122,8 +122,9 @@ Create a `.env` file in the project root:
 # Required
 GROQ_API_KEY=
 
-# News (optional — Google RSS fallback used if absent)
-NEWSAPI_KEY=
+# News (Finnhub primary, FMP fallback, Google RSS emergency fallback)
+FINNHUB_API_KEY=
+FMP_API_KEY=
 
 # Reddit sentiment
 REDDIT_CLIENT_ID=

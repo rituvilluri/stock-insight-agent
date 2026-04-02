@@ -171,7 +171,7 @@ These are the features that must exist for the product to deliver any value. The
 - Structured state management across all nodes
 - Basic error handling and graceful failure messaging
 
-*Status: Complete. All Phase 2 nodes built and wired into workflow.*
+*Status: Complete. All Phase 1 and Phase 2 nodes built, tested, and wired into workflow.*
 
 ### Phase 2: Multi-Source Intelligence
 
@@ -204,7 +204,9 @@ This phase adds depth through earnings report analysis, building a growing knowl
 - Integration of filing context into the multi-source narrative so the agent can reference what management specifically said about results
 - At Phase 5 deployment, ChromaDB migrates from local embedded mode to ChromaDB Cloud free tier (1GB hosted storage) — same API, one config change, eliminates local disk dependency on the deployed container
 
-*Dependency: Requires Phase 2. The RAG node plugs into the existing multi-source synthesis flow as an additional data dimension. Build order: Phase 4 (Options) is being built before Phase 3 — see Decision 14 in the Decision Log.*
+*Status: Complete (partial). 10-K and 10-Q ingestion via SEC EDGAR is live and wired into the stock_analysis fan-out (Node 7). 8-K filings and earnings call transcripts are designed and planned (see PRD spec above and Decision 15) but not yet implemented in rag_retriever.py — deferred to the next RAG iteration.*
+
+*Dependency: Requires Phase 2. The RAG node plugs into the existing multi-source synthesis flow as an additional data dimension. Build order: Phase 4 (Options) was built before Phase 3 — see Decision 14 in the Decision Log.*
 
 ### Phase 4: Options Analysis
 
@@ -222,7 +224,9 @@ This phase adds the options market dimension to complete the full picture descri
 - Earnings date awareness: next earnings date and days remaining, surfaced prominently in options responses to contextualize elevated IV before earnings and expected IV crush after
 - Integration of all options and enrichment context into the multi-source narrative
 
-*Dependency: Independent of Phase 3. Being built before Phase 3 (see Decision 14). Options data retrieval feeds into the same synthesis node as the RAG pipeline but requires no RAG infrastructure.*
+*Status: Complete. Options chain, put/call ratio, Black-Scholes Greeks, Max Pain, top-volume strikes, analyst ratings, short interest, and earnings proximity all implemented in Node 8 (options_analyzer.py) and Node 4 enrichments (data_fetcher.py). Wired into workflow.*
+
+*Dependency: Independent of Phase 3. Built before Phase 3 (see Decision 14). Options data retrieval feeds into the same synthesis node as the RAG pipeline but requires no RAG infrastructure.*
 
 ### Phase 5: User Configuration and Infrastructure
 

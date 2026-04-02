@@ -28,7 +28,7 @@ from agent.graph.workflow import app as graph
 @pytest.mark.asyncio
 async def test_smoke_nvda_last_month():
     """Full pipeline for NVDA last month — price, news, response."""
-    state = {"user_message": "How did NVDA do last month?", "user_config": {}, "response_depth": "quick"}
+    state = {"user_message": "How did NVDA do last month?", "user_config": {}}
     final = await graph.ainvoke(state)
 
     assert final.get("ticker") == "NVDA"
@@ -49,7 +49,6 @@ async def test_smoke_q4_2025_date_accuracy():
     state = {
         "user_message": "Tell me how Nvidia did Q4 2025. Show me a chart as well",
         "user_config": {},
-        "response_depth": "quick",
     }
     final = await graph.ainvoke(state)
 
@@ -61,29 +60,26 @@ async def test_smoke_q4_2025_date_accuracy():
 
 
 @pytest.mark.asyncio
-async def test_smoke_deep_dive_has_all_sections():
-    """Deep dive response must contain all 5 markdown sections."""
-    state = {"user_message": "Deep dive on NVDA last month", "user_config": {}, "response_depth": "deep"}
+async def test_smoke_analyst_brief_has_all_sections():
+    """Analyst brief response must contain all required markdown sections."""
+    state = {"user_message": "How did NVDA do last month?", "user_config": {}}
     final = await graph.ainvoke(state)
 
     response = final.get("response_text") or ""
     required_sections = [
         "## Price Action",
         "## News & Catalysts",
-        "## Market Sentiment",
-        "## SEC Filings",
-        "## Options Activity",
     ]
     for section in required_sections:
-        assert section in response, f"Deep dive missing section: {section!r}"
+        assert section in response, f"Analyst brief missing section: {section!r}"
 
-    print(f"\n[SMOKE] deep dive response length={len(response)} chars")
+    print(f"\n[SMOKE] analyst brief response length={len(response)} chars")
 
 
 @pytest.mark.asyncio
 async def test_smoke_unknown_intent_produces_clarification():
     """Non-stock query must produce a clarification message, not a crash."""
-    state = {"user_message": "What is the capital of France?", "user_config": {}, "response_depth": "quick"}
+    state = {"user_message": "What is the capital of France?", "user_config": {}}
     final = await graph.ainvoke(state)
 
     assert final.get("intent") == "unknown"

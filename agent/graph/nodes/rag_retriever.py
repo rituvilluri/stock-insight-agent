@@ -30,21 +30,13 @@ import os
 import re
 import time
 from datetime import datetime
+from html.parser import HTMLParser
 from typing import Optional
 
-from bs4 import BeautifulSoup
-
 import chromadb
-try:
-    from google import genai
-    from google.genai import types as genai_types
-    _GENAI_AVAILABLE = True
-except ImportError:
-    genai = None  # type: ignore[assignment]
-    genai_types = None  # type: ignore[assignment]
-    _GENAI_AVAILABLE = False
+from google import genai
+from google.genai import types as genai_types
 import requests
-from langsmith import traceable
 
 from agent.graph.nodes.state import AgentState
 
@@ -74,25 +66,30 @@ _MAX_FILINGS_TO_INGEST = 3   # cap ingestion per query to stay within rate limit
 # HTML cleaning
 # ---------------------------------------------------------------------------
 
-def _strip_html(html: str) -> str:
-    """
-    Extract plain text from SEC filing HTML using BeautifulSoup4.
+class _TagStripper(HTMLParser):
+    """Minimal HTML → plain text converter (no third-party deps)."""
 
-    Why BeautifulSoup over stdlib HTMLParser?
-    SEC 10-K/10-Q filings contain <style>, <script>, and inline XBRL tags
-    that HTMLParser includes verbatim. BeautifulSoup lets us decompose
-    unwanted tags before extracting text, producing clean prose.
-    """
+    def __init__(self):
+        super().__init__()
+        self._parts: list[str] = []
+
+    def handle_data(self, data: str) -> None:
+        self._parts.append(data)
+
+    def get_text(self) -> str:
+        return " ".join(self._parts)
+
+
+def _strip_html(html: str) -> str:
+    parser = _TagStripper()
     try:
-        soup = BeautifulSoup(html, "html.parser")
-        for tag in soup(["style", "script", "meta", "link", "head"]):
-            tag.decompose()
-        text = soup.get_text(separator=" ")
-        text = re.sub(r"\s+", " ", text).strip()
-        return text
-    except Exception as e:
-        logger.warning("_strip_html failed: %s — returning empty string", e)
-        return ""
+        parser.feed(html)
+    except Exception:
+        pass
+    text = parser.get_text()
+    # Collapse whitespace runs
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
 
 
 # ---------------------------------------------------------------------------
@@ -132,96 +129,37 @@ def _chunk_text(text: str, ticker: str, filing_type: str, period: str) -> list[d
 # Embedding
 # ---------------------------------------------------------------------------
 
-def _get_embedding_fn():
-    """
-    Return (embed_texts_fn, embed_query_fn) based on available credentials.
-
-    Priority:
-      1. Google Gemini text-embedding-004 if GEMINI_API_KEY is set.
-      2. sentence-transformers all-MiniLM-L6-v2 as a local fallback.
-
-    The sentence-transformers fallback produces 384-dim vectors vs Gemini's
-    768-dim vectors.  Both work with ChromaDB's cosine distance metric, but
-    embeddings from different models are NOT interchangeable — a fresh
-    collection should be used when switching models.
-    """
-    gemini_key = os.getenv("GEMINI_API_KEY")
-    if gemini_key and _GENAI_AVAILABLE:
-        client = genai.Client(api_key=gemini_key)
-
-        def embed_texts_gemini(texts: list[str]) -> list[list[float]]:
-            all_vectors = []
-            for i in range(0, len(texts), 100):
-                batch = texts[i : i + 100]
-                # Gemini free tier: 100 req/min. Add inter-batch delay to avoid 429.
-                if i > 0:
-                    time.sleep(1.0)
-                for attempt in range(3):
-                    try:
-                        response = client.models.embed_content(
-                            model=EMBEDDING_MODEL,
-                            contents=batch,
-                            config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
-                        )
-                        all_vectors.extend([e.values for e in response.embeddings])
-                        break
-                    except Exception as e:
-                        if "429" in str(e) and attempt < 2:
-                            wait = 60 * (attempt + 1)
-                            logger.warning("Gemini rate limit hit — waiting %ds before retry", wait)
-                            time.sleep(wait)
-                        else:
-                            raise
-            return all_vectors
-
-        def embed_query_gemini(text: str) -> list[float]:
-            response = client.models.embed_content(
-                model=EMBEDDING_MODEL,
-                contents=text,
-                config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
-            )
-            return response.embeddings[0].values
-
-        return embed_texts_gemini, embed_query_gemini
-
-    # Fallback: sentence-transformers all-MiniLM-L6-v2 (local, no API key needed)
-    logger.warning(
-        "GEMINI_API_KEY not set — falling back to sentence-transformers all-MiniLM-L6-v2. "
-        "Embeddings are 384-dim (vs Gemini 768-dim). Use a separate ChromaDB collection "
-        "to avoid mixing incompatible vectors."
-    )
-    from sentence_transformers import SentenceTransformer  # noqa: PLC0415
-    _st_model = SentenceTransformer("all-MiniLM-L6-v2")
-
-    def embed_texts_st(texts: list[str]) -> list[list[float]]:
-        return _st_model.encode(texts, show_progress_bar=False).tolist()
-
-    def embed_query_st(text: str) -> list[float]:
-        return _st_model.encode([text], show_progress_bar=False)[0].tolist()
-
-    return embed_texts_st, embed_query_st
-
-
-# Module-level embed functions — resolved once at import time if GEMINI_API_KEY
-# is set, or lazily on first call via _get_embedding_fn().
-_embed_texts_fn = None
-_embed_query_fn = None
+def _get_genai_client() -> genai.Client:
+    return genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
 
 
 def _embed_texts(texts: list[str]) -> list[list[float]]:
-    """Batch-embed texts using the active embedding backend."""
-    global _embed_texts_fn, _embed_query_fn
-    if _embed_texts_fn is None:
-        _embed_texts_fn, _embed_query_fn = _get_embedding_fn()
-    return _embed_texts_fn(texts)
+    """
+    Batch-embed texts using Gemini text-embedding-004.
+    Processes in batches of 100 (API limit).
+    """
+    client = _get_genai_client()
+    all_vectors = []
+    batch_size = 100
+    for i in range(0, len(texts), batch_size):
+        batch = texts[i : i + batch_size]
+        response = client.models.embed_content(
+            model=EMBEDDING_MODEL,
+            contents=batch,
+            config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT"),
+        )
+        all_vectors.extend([e.values for e in response.embeddings])
+    return all_vectors
 
 
 def _embed_query(text: str) -> list[float]:
-    """Embed a query string using the active embedding backend."""
-    global _embed_texts_fn, _embed_query_fn
-    if _embed_query_fn is None:
-        _embed_texts_fn, _embed_query_fn = _get_embedding_fn()
-    return _embed_query_fn(text)
+    client = _get_genai_client()
+    response = client.models.embed_content(
+        model=EMBEDDING_MODEL,
+        contents=text,
+        config=genai_types.EmbedContentConfig(task_type="RETRIEVAL_QUERY"),
+    )
+    return response.embeddings[0].values
 
 
 # ---------------------------------------------------------------------------
@@ -331,14 +269,11 @@ def _discover_filings(cik: str, ticker: str, start_date: str, end_date: str) -> 
     return results
 
 
-@traceable(name="rag:edgar-download")
 def _download_filing(cik: str, accession_no: str, primary_doc: str) -> Optional[str]:
     """Download a filing document from EDGAR and return clean plain text."""
-    # EDGAR Archive URLs use the accession number WITHOUT dashes in the path segment.
-    # e.g. /Archives/edgar/data/{cik}/{acc_no_dashes}/{primary_doc}
-    # accession_no is already stored without dashes by _discover_filings.
-    acc_no_dashes = accession_no.replace("-", "")
-    url = f"{EDGAR_FILING_BASE}/{int(cik)}/{acc_no_dashes}/{primary_doc}"
+    # accession_no is already dash-free (stored that way by _discover_filings).
+    # EDGAR Archives paths use the no-dash form: /data/{cik}/{accession_no}/{doc}
+    url = f"{EDGAR_FILING_BASE}/{int(cik)}/{accession_no}/{primary_doc}"
     resp = _edgar_get(url)
     if not resp:
         return None
@@ -357,7 +292,6 @@ def _get_collection() -> chromadb.Collection:
     )
 
 
-@traceable(name="rag:ingest-filing")
 def _ingest_filing(collection: chromadb.Collection, filing: dict, ticker: str) -> int:
     """
     Download, chunk, embed, and store a single filing.
@@ -393,15 +327,58 @@ def _ingest_filing(collection: chromadb.Collection, filing: dict, ticker: str) -
     return len(new_chunks)
 
 
-@traceable(name="rag:query-chromadb")
+_MIN_RELEVANCE_SCORE = 0.62
+
+
+def _periods_for_date_range(start_date: str, end_date: str) -> list[str]:
+    """
+    Return a list of filing_period strings (e.g. ["2025Q3", "2025Q4", "2026Q1"])
+    that overlap with the query date range, including a 180-day lookback so that
+    filings published shortly before the query start are still eligible.
+
+    Period labels stored in ChromaDB are in YYYYQ{N} format, e.g. "2024Q2".
+    """
+    try:
+        from datetime import timedelta
+        sd = datetime.fromisoformat(start_date) - timedelta(days=180)
+        ed = datetime.fromisoformat(end_date) + timedelta(days=90)
+    except ValueError:
+        return []
+
+    periods = []
+    year = sd.year
+    quarter = ((sd.month - 1) // 3) + 1
+
+    while True:
+        periods.append(f"{year}Q{quarter}")
+        # Advance one quarter
+        if quarter == 4:
+            quarter = 1
+            year += 1
+        else:
+            quarter += 1
+        # Stop once we've passed the end bound
+        quarter_start_month = (quarter - 1) * 3 + 1
+        if datetime(year, quarter_start_month, 1) > ed:
+            break
+
+    return periods
+
+
 def _query_collection(
     collection: chromadb.Collection,
     ticker: str,
     user_message: str,
+    filing_periods: list[str] | None = None,
 ) -> list[dict]:
     """
-    Semantic search in ChromaDB filtered to ticker, returns top-K chunks.
+    Semantic search in ChromaDB filtered to ticker and optionally filing_period.
+    Applies a minimum relevance score threshold to exclude low-signal chunks.
     Returns list of filing_chunk dicts matching the state schema.
+
+    filing_periods: if provided, only chunks whose filing_period is in this list
+    are returned. This prevents the cache-first path from returning 2024 filings
+    for a 2026 query.
     """
     try:
         count = collection.count()
@@ -412,6 +389,10 @@ def _query_collection(
 
     query_vec = _embed_query(user_message or ticker)
 
+    # Filter by ticker only in ChromaDB — period filtering done in Python below.
+    # Combining ticker + filing_period in a ChromaDB $and filter risks raising
+    # "n_results cannot be greater than number of matching documents" when the
+    # collection is large but fewer chunks match the narrow period set.
     try:
         results = collection.query(
             query_embeddings=[query_vec],
@@ -431,6 +412,12 @@ def _query_collection(
     for doc, meta, dist in zip(docs, metas, distances):
         # Convert cosine distance → similarity score (0–1)
         score = round(1 - dist, 4)
+        if score < _MIN_RELEVANCE_SCORE:
+            continue  # skip low-signal chunks (boilerplate tables, headers, etc.)
+        # Period filter applied here in Python rather than in ChromaDB query to
+        # avoid n_results > filtered-count errors when the collection is large.
+        if filing_periods and meta.get("filing_period") not in filing_periods:
+            continue
         chunks.append({
             "text": doc,
             "filing_type": meta.get("filing_type", ""),
@@ -446,14 +433,6 @@ def _query_collection(
 # Node function
 # ---------------------------------------------------------------------------
 
-# LangSmith observation (2026-03-19): median latency ~1,656ms across 1 run (only
-# full stock_analysis trace in project). Slowest node in the graph.
-# Primary bottleneck: ChromaDB client initialisation + GEMINI_API_KEY absence
-# triggers an early-exit path that still incurs the client startup cost (~1.6s).
-# When GEMINI_API_KEY is present, expect additional latency from Gemini embedding
-# HTTP call + SEC EDGAR fetch on cache miss. Expect 2-5s on first ingestion.
-# Error rate: 0% across all runs — GEMINI_API_KEY absence is handled gracefully
-# via filing_error field, not a raised exception.
 def retrieve_rag_context(state: AgentState) -> AgentState:
     """
     Node 7: RAG Retriever.
@@ -474,92 +453,51 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
         logger.debug("retrieve_rag_context: no date range for %s, skipping", ticker)
         return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
+    gemini_api_key = os.getenv("GEMINI_API_KEY")
+    if not gemini_api_key:
+        logger.warning("retrieve_rag_context: GEMINI_API_KEY not set")
+        return {"filing_chunks": [], "filing_ingested": False, "filing_error": "GEMINI_API_KEY not configured"}
+
     try:
-        logger.info("retrieve_rag_context: START ticker=%s range=[%s → %s]", ticker, start_date, end_date)
+        collection = _get_collection()
+        filing_periods = _periods_for_date_range(start_date, end_date)
+        logger.info(
+            "retrieve_rag_context: eligible filing periods for %s: %s",
+            ticker, filing_periods,
+        )
 
-        # Sub-step A: get ChromaDB collection
-        try:
-            collection = _get_collection()
-            logger.info("retrieve_rag_context [chromadb]: collection opened at %s", CHROMA_PERSIST_DIR)
-        except Exception as e:
-            logger.error("retrieve_rag_context [chromadb]: FAILED to open collection: %s", e)
-            return {"filing_chunks": [], "filing_ingested": False, "filing_error": f"ChromaDB open failed: {e}"}
-
-        # Sub-step B: try retrieval from existing vector store
-        try:
-            chunks = _query_collection(collection, ticker, user_message)
-        except Exception as e:
-            logger.error("retrieve_rag_context [query]: FAILED: %s", e)
-            return {"filing_chunks": [], "filing_ingested": False, "filing_error": f"ChromaDB query failed: {e}"}
-
+        # Step 1: try retrieval from existing vector store (date-filtered)
+        chunks = _query_collection(collection, ticker, user_message, filing_periods=filing_periods)
         if chunks:
-            logger.info("retrieve_rag_context [query]: %d chunks from cache for %s", len(chunks), ticker)
+            logger.info("retrieve_rag_context: %d chunks retrieved from cache for %s", len(chunks), ticker)
             return {"filing_chunks": chunks, "filing_ingested": False, "filing_error": None}
 
-        logger.info("retrieve_rag_context [query]: 0 chunks in cache for %s — attempting EDGAR ingestion", ticker)
-
-        # Sub-step C: resolve CIK
-        try:
-            cik = _get_cik(ticker)
-        except Exception as e:
-            logger.error("retrieve_rag_context [edgar-cik]: FAILED: %s", e)
-            return {"filing_chunks": [], "filing_ingested": False, "filing_error": f"CIK lookup failed: {e}"}
-
+        # Step 2: no cached chunks for this date range → discover and ingest from EDGAR
+        cik = _get_cik(ticker)
         if not cik:
-            logger.info("retrieve_rag_context [edgar-cik]: no CIK found for %s", ticker)
+            logger.info("retrieve_rag_context: CIK not found for %s", ticker)
             return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
-        logger.info("retrieve_rag_context [edgar-cik]: %s → CIK %s", ticker, cik)
-
-        # Sub-step D: discover filings
-        try:
-            filings = _discover_filings(cik, ticker, start_date, end_date)
-        except Exception as e:
-            logger.error("retrieve_rag_context [edgar-discover]: FAILED: %s", e)
-            return {"filing_chunks": [], "filing_ingested": False, "filing_error": f"EDGAR discovery failed: {e}"}
-
+        filings = _discover_filings(cik, ticker, start_date, end_date)
         if not filings:
-            logger.info(
-                "retrieve_rag_context [edgar-discover]: no 10-K/10-Q found for %s in [%s → %s]",
-                ticker, start_date, end_date,
-            )
+            logger.info("retrieve_rag_context: no EDGAR filings found for %s in range", ticker)
             return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
-        logger.info("retrieve_rag_context [edgar-discover]: found %d filings for %s", len(filings), ticker)
-
-        # Sub-step E: ingest filings
         total_new = 0
         for filing in filings:
-            try:
-                new_count = _ingest_filing(collection, filing, ticker)
-                total_new += new_count
-            except Exception as e:
-                logger.error(
-                    "retrieve_rag_context [ingest]: FAILED for %s %s: %s",
-                    ticker, filing.get("period", "?"), e,
-                )
-                # Continue to next filing — partial ingestion is better than none
+            total_new += _ingest_filing(collection, filing, ticker)
 
-        logger.info("retrieve_rag_context [ingest]: %d new chunks ingested for %s", total_new, ticker)
+        if total_new == 0:
+            logger.info("retrieve_rag_context: filings already ingested or empty for %s", ticker)
 
-        # Sub-step F: re-query after ingestion
-        try:
-            chunks = _query_collection(collection, ticker, user_message)
-        except Exception as e:
-            logger.error("retrieve_rag_context [re-query]: FAILED after ingestion: %s", e)
-            return {"filing_chunks": [], "filing_ingested": total_new > 0, "filing_error": f"Re-query failed: {e}"}
-
+        # Step 3: re-query after ingestion (same date filter)
+        chunks = _query_collection(collection, ticker, user_message, filing_periods=filing_periods)
         logger.info(
-            "retrieve_rag_context: DONE — ingested=%d retrieved=%d for %s",
+            "retrieve_rag_context: ingested %d new chunks, retrieved %d for %s",
             total_new, len(chunks), ticker,
-        )
-        logger.info(
-            "rag_retriever metadata — chunks_retrieved=%d filing_periods=%s",
-            len(chunks),
-            [f["period"] for f in filings] if filings else [],
         )
         return {"filing_chunks": chunks, "filing_ingested": total_new > 0, "filing_error": None}
 
     except Exception as e:
-        logger.error("retrieve_rag_context: UNEXPECTED failure: %s", e)
+        logger.error("retrieve_rag_context failed: %s", e)
         return {"filing_chunks": [], "filing_ingested": False, "filing_error": str(e)}

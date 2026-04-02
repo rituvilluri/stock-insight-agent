@@ -30,3 +30,20 @@ app/chainlit/static/charts/*.html
 
 # Superpowers planning artifacts (specs and plans are working docs, not codebase artifacts)
 docs/superpowers/
+
+# ChromaDB vector store (runtime-generated embeddings, rebuilt on first run)
+data/
+
+# Pytest coverage artifact
+.coverage
+.coverage.*
+htmlcov/
+
+# Chainlit auto-generated i18n translation files (regenerated at startup)
+.chainlit/translations/
+
+# Claude Code session logs (personal, not project config)
+.remember/
+
+# Salesforce DX (unrelated tooling — not part of this project)
+.sfdx/
