@@ -292,19 +292,20 @@ def test_node_preserves_existing_state_fields(mock_llm):
 # Prompt structure tests
 # ---------------------------------------------------------------------------
 
-def test_prompt_contains_section_headers():
-    """Synthesis prompt must list the standard markdown section headers."""
+def test_prompt_uses_continuous_prose_format():
+    """Prompt must instruct continuous prose and inline citations, not ## section headers."""
     state = _make_state()
     prompt = _build_synthesis_prompt(state)
-    for section in ["Price Action", "News & Catalysts", "Market Sentiment", "SEC Filings", "Options Activity"]:
-        assert section in prompt, f"Synthesis prompt missing section: {section}"
+    assert "No ## headers" in prompt
+    assert "[1]" in prompt  # citation format instruction present
+    assert "350" in prompt and "500" in prompt  # word count guidance
 
 
 def test_grounding_instruction_in_prompt():
-    """Prompt must contain the grounding instruction."""
+    """Prompt must contain a grounding instruction against training-knowledge fill-ins."""
     state = _make_state()
     prompt = _build_synthesis_prompt(state)
-    assert "do not fill gaps from training knowledge" in prompt.lower()
+    assert "training-knowledge" in prompt.lower() or "training knowledge" in prompt.lower()
 
 
 def test_prompt_includes_analyst_data():

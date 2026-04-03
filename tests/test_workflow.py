@@ -22,6 +22,7 @@ from langgraph.types import Send
 from agent.graph.workflow import (
     route_after_date_parser,
     route_after_fetch_price,
+    route_after_plan_retrieval,
     route_after_synthesizer,
     create_workflow,
 )
@@ -99,27 +100,37 @@ def test_route_fetch_price_chart_request_to_generate_chart():
     assert route_after_fetch_price(state) == "generate_chart"
 
 
-def _assert_parallel_fan_out(result):
-    """Helper: result must be [Send(retrieve_news), Send(reddit_sentiment), Send(retrieve_rag)]."""
-    assert isinstance(result, list), "Expected list of Send objects"
-    assert len(result) == 3
-    nodes = {s.node for s in result}
-    assert nodes == {"retrieve_news", "reddit_sentiment", "retrieve_rag"}
-
-
-def test_route_fetch_price_stock_analysis_fans_out():
+def test_route_fetch_price_stock_analysis_to_planner():
+    """Phase 5: analysis intents route to plan_retrieval, not directly to fan-out."""
     state = _state(intent="stock_analysis")
-    _assert_parallel_fan_out(route_after_fetch_price(state))
+    assert route_after_fetch_price(state) == "plan_retrieval"
 
 
-def test_route_fetch_price_general_lookup_fans_out():
+def test_route_fetch_price_general_lookup_to_planner():
     state = _state(intent="general_lookup")
-    _assert_parallel_fan_out(route_after_fetch_price(state))
+    assert route_after_fetch_price(state) == "plan_retrieval"
 
 
-def test_route_fetch_price_options_view_fans_out():
+def test_route_fetch_price_options_view_to_planner():
+    """options_view reaching route_after_fetch_price also goes to planner."""
     state = _state(intent="options_view")
-    _assert_parallel_fan_out(route_after_fetch_price(state))
+    assert route_after_fetch_price(state) == "plan_retrieval"
+
+
+def test_route_plan_retrieval_all_active():
+    """All-active plan fans out to all three retrieval nodes."""
+    state = _state(retrieval_plan={"fetch_news": True, "fetch_sentiment": True, "fetch_rag": True})
+    result = route_after_plan_retrieval(state)
+    assert isinstance(result, list)
+    assert {s.node for s in result} == {"retrieve_news", "reddit_sentiment", "retrieve_rag"}
+
+
+def test_route_plan_retrieval_selective():
+    """Selective plan emits only enabled nodes."""
+    state = _state(retrieval_plan={"fetch_news": True, "fetch_sentiment": False, "fetch_rag": False})
+    result = route_after_plan_retrieval(state)
+    assert len(result) == 1
+    assert result[0].node == "retrieve_news"
 
 
 # ---------------------------------------------------------------------------
@@ -163,31 +174,36 @@ def test_create_workflow_compiles_without_error():
 # End-to-end routing test (all external calls mocked)
 # ---------------------------------------------------------------------------
 
-@patch("agent.graph.nodes.chart_generator.go")          # mock Plotly
+@pytest.mark.asyncio
+@patch("agent.graph.nodes.chart_generator.go")
 @patch("agent.graph.nodes.response_synthesizer.llm_synthesizer")
+@patch("agent.graph.nodes.retrieval_planner.llm_planner")
 @patch("agent.graph.nodes.date_parser.llm_classifier")
 @patch("agent.graph.nodes.ticker_resolver.llm_classifier")
 @patch("agent.graph.nodes.intent_classifier.llm_classifier")
-def test_e2e_stock_analysis_no_chart(
+async def test_e2e_stock_analysis_no_chart(
     mock_intent_llm,
     mock_ticker_llm,
     mock_date_llm,
+    mock_planner_llm,
     mock_synth_llm,
     mock_plotly_go,
 ):
     """
     Happy path: stock_analysis intent, no chart requested.
     Verifies response_text is written and chart_data is absent.
-    All LLM and Plotly calls are mocked.
+    All LLM and external API calls are mocked.
     """
-    # Intent classifier
-    mock_intent_llm.invoke.return_value = MagicMock(
-        content='{"intent": "stock_analysis", "chart_requested": false}'
-    )
-    # Ticker resolver — direct ticker detected, no LLM needed for NVDA
+    # Intent classifier uses with_structured_output().invoke() — must mock at that level
+    intent_result = MagicMock()
+    intent_result.intent = "stock_analysis"
+    intent_result.chart_requested = False
+    mock_intent_llm.with_structured_output.return_value.invoke.return_value = intent_result
 
-    # Date parser — provide a direct match for "last week"
-    # (the simple regex should handle it; no LLM call needed)
+    # Retrieval planner — return a plan that activates all nodes
+    mock_planner_llm.invoke.return_value = MagicMock(
+        content='{"fetch_news": true, "fetch_sentiment": true, "fetch_rag": true}'
+    )
 
     # Response synthesizer
     mock_synth_llm.invoke.return_value = MagicMock(
@@ -212,15 +228,14 @@ def test_e2e_stock_analysis_no_chart(
         mock_yf.return_value = mock_inst
 
         graph = create_workflow()
-        result = graph.invoke({
+        result = await graph.ainvoke({
             "user_message": "How did NVDA do last week?",
             "user_config": {},
         })
 
     assert result.get("response_text") is not None
     assert result.get("synthesizer_error") is None
-    # No chart requested
-    assert not result.get("chart_requested", False)
+    assert result.get("chart_requested") is False
 
 
 @patch("agent.graph.nodes.response_synthesizer.llm_synthesizer")

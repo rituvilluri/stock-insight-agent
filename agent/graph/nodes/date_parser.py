@@ -322,6 +322,19 @@ def _get_earnings_date(ticker: str, quarter: int, year: int) -> datetime | None:
     Why a separate function?
     Makes it easy to mock in tests without mocking the whole node, and
     keeps the yfinance-specific logic isolated from the parsing logic.
+
+    Fiscal calendar handling:
+    The search window runs from the start of the calendar quarter through
+    2 months and 15 days after the quarter ends (~75 days). This handles
+    companies whose fiscal year differs from the calendar year (e.g. NVIDIA
+    Q4 FY: fiscal year ends January, earnings reported February — outside
+    the calendar Q4 Oct-Dec boundary but within the 75-day window).
+
+    Why 75 days and not 4 months?
+    A 4-month window caused the Q3 window to bleed into January (Q4 report
+    month for many companies), picking up the wrong earnings date. 75 days
+    covers the widest real-world fiscal offset (~60 days for NVIDIA Q4)
+    while staying clear of the next quarter's reporting window.
     """
     if not ticker:
         return None
@@ -335,13 +348,21 @@ def _get_earnings_date(ticker: str, quarter: int, year: int) -> datetime | None:
 
         start_month, end_month = _QUARTER_MONTHS[quarter]
 
+        # Extended search window: from start of the calendar quarter
+        # to 75 days after it closes. Covers fiscal-calendar companies
+        # without bleeding into the next quarter's reporting window.
+        window_start = datetime(year, start_month, 1)
+        quarter_end_day = _calendar.monthrange(year, end_month)[1]
+        quarter_end = datetime(year, end_month, quarter_end_day)
+        window_end = quarter_end + timedelta(days=75)
+
         for ts in df.index:
             # earnings_dates index is timezone-aware; strip tz for arithmetic
             dt = ts.to_pydatetime()
             if dt.tzinfo is not None:
                 dt = dt.replace(tzinfo=None)
 
-            if dt.year == year and start_month <= dt.month <= end_month:
+            if window_start <= dt <= window_end:
                 return dt
 
         return None

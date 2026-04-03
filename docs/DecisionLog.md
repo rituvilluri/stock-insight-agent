@@ -366,3 +366,65 @@ An intermediate step used Groq llama-3.3-70b-versatile as the synthesizer upgrad
 **Choice and Rationale:** You.com Search API. The `freshness` parameter makes server-side date filtering reliable for the Layer 2 use case (historical queries beyond Finnhub's range). Coverage is broader than FMP's feed-based approach because it indexes the web. $100 free credits are sufficient for development and demo use.
 
 **Tradeoffs Accepted:** New env variable: `YOUCOM_API_KEY`. Credits are finite (not unlimited free tier); monitor usage during sustained testing. Source attribution in responses shows "youcom" as the provider when Layer 2 is used. The `news_source_used` state field now takes values "finnhub", "youcom", "google_rss", or "none" — updated in state.py comments and TDD.md.
+
+---
+
+## Decision 18: Reddit Public JSON + Stocktwits Replacing PRAW
+
+**Date:** April 2026 **Status:** Accepted
+
+**Decision:** Replace PRAW (Reddit's official Python client) with Reddit's public JSON endpoints as the primary sentiment source, and add Stocktwits as a co-primary source running on every query.
+
+**Context:** Node 6 originally used PRAW for Reddit sentiment retrieval. During Phase 5 eval runs, PRAW's OAuth credential requirement and rate-limiting behaviour caused intermittent failures that degraded sentiment coverage in the eval dataset. Reddit's public JSON endpoints (`reddit.com/r/{subs}/search.json`) return the same post data without requiring any authentication. Stocktwits (`api.stocktwits.com/api/2/streams/symbol/{ticker}.json`) provides a purpose-built financial sentiment feed with pre-labeled sentiment tags ("Bullish"/"Bearish") on a significant portion of messages, reducing the number of LLM classification calls required.
+
+**Options Considered:**
+
+- **PRAW (status quo):** Official client, well-documented. Requires OAuth credentials. Rate-limit failures observed during eval runs.
+- **Reddit public JSON endpoints:** No authentication. Same underlying data. Date filtering applied post-fetch (Reddit's search API does not support server-side date ranges without OAuth). Simpler, more reliable.
+- **Pushshift API:** Historical Reddit archive. Shut down in 2023 — not viable.
+- **Reddit API v2 (paid tier):** Extended access at cost. Rejected — zero-cost constraint.
+
+**Choice and Rationale:** Reddit public JSON + Stocktwits as co-primary sources. The public endpoints eliminate auth failures entirely. Stocktwits adds a second signal from a finance-specific community, improving coverage for recent queries (< 30 days) where Stocktwits stream depth is strongest. Reddit carries the historical load for older date ranges where Stocktwits returns sparse results. Pre-labeled Stocktwits sentiment reduces LLM classifier calls. Both sources run on every query; results are combined and aggregated into `sentiment_summary` with a per-source breakdown for transparency in Node 9.
+
+**Tradeoffs Accepted:** No `REDDIT_CLIENT_ID` or `REDDIT_CLIENT_SECRET` env variables required. Post-fetch date filtering on Reddit results is less precise than server-side filtering — posts near the boundary of the date range may be included or excluded inconsistently. Stocktwits stream is best-effort for historical queries; returns zero results gracefully for older date ranges without failing the node.
+
+---
+
+## Decision 19: Firecrawl for News Article Enrichment
+
+**Date:** April 2026 **Status:** Accepted
+
+**Decision:** Add Firecrawl as a post-retrieval enrichment step in Node 5 (News Retriever) to fetch full article text for articles from known free-access domains.
+
+**Context:** Finnhub and You.com both return truncated article excerpts — approximately 200–600 characters of snippet text. For the Response Synthesizer to produce a grounded, cited narrative, it needs enough article content to identify the specific claims, numbers, and context reported. Short snippets produce thin, low-confidence synthesis ("NVIDIA reported strong earnings" without the actual figures or analyst reactions). Full article text enables specific, attributable claims.
+
+**Options Considered:**
+
+- **No enrichment (status quo):** 600-char snippets. Synthesis degrades to surface-level summaries. No additional API required.
+- **Direct HTTP scraping:** Legally ambiguous (violates most publishers' ToS). Brittle — breaks on layout changes, blocked by anti-scraping measures. No paywalled content. High maintenance burden.
+- **Jina Reader API:** Converts URLs to markdown. Free tier available. Less reliable JavaScript rendering compared to Firecrawl.
+- **Firecrawl:** Purpose-built web scraping API. Returns clean markdown. Handles JavaScript-rendered pages. Free tier: 500 credits/month. Gracefully skipped if `FIRECRAWL_API_KEY` is not set.
+
+**Choice and Rationale:** Firecrawl with graceful degradation. Enrichment is applied only to articles from a known set of free-access financial domains (reuters.com, cnbc.com, apnews.com, finance.yahoo.com, benzinga.com, marketwatch.com) — paywalled sources are skipped. 500 credits/month is sufficient for the query volume this agent handles. The enrichment step is entirely non-fatal: if Firecrawl is unavailable or the key is absent, Node 5 falls back to the 600-char snippet with no error surfaced to the user.
+
+**Tradeoffs Accepted:** New optional env variable: `FIRECRAWL_API_KEY`. Without it, synthesis quality degrades to snippet-level. Credits are finite — monitor during sustained testing. Enrichment adds latency to Node 5 (one Firecrawl call per eligible article, run after retrieval). Full text is capped at 2,000 characters per article to limit synthesizer prompt size.
+
+---
+
+## Decision 20: Retrieval Planner Node for Adaptive Fan-Out
+
+**Date:** April 2026 **Status:** Accepted
+
+**Decision:** Insert a Retrieval Planner node between Node 4 (Price Data Fetcher) and the parallel retrieval fan-out (Nodes 5, 6, 7). The planner uses an LLM call to emit a `retrieval_plan` dict that controls which retrieval nodes are activated via `Send()`.
+
+**Context:** Prior to Phase 5, Nodes 5, 6, and 7 ran unconditionally on every `stock_analysis` query via `Send()` fan-out. This meant a query like "how did AAPL perform last week?" triggered full news retrieval, Reddit sentiment analysis, and a ChromaDB RAG search — all of which add latency and API cost without contributing meaningful signal to what is essentially a price performance question. Conversely, a query asking about earnings guidance commentary would benefit more from RAG than from Reddit sentiment. A static fan-out cannot distinguish between these cases.
+
+**Options Considered:**
+
+- **Static fan-out (status quo):** All three nodes always run. Simple graph topology. No LLM overhead for routing. Wastes 3–7 seconds of I/O on irrelevant retrievals.
+- **Rule-based routing (if-else on intent/keywords):** Deterministic. No additional LLM call. Fragile — intent alone is not sufficient signal; "stock_analysis" covers queries ranging from simple price lookups to deep fundamental analysis.
+- **LLM-driven planner node:** One lightweight LLM call (~100 ms, llama-3.1-8b-instant, max_tokens=512) produces a `retrieval_plan` dict with boolean flags (`fetch_news`, `fetch_sentiment`, `fetch_rag`). The router reads these flags and emits only the relevant `Send()` calls. Falls back to activating all three nodes if the LLM call fails or returns unparseable output — identical to pre-planner behaviour.
+
+**Choice and Rationale:** LLM-driven planner. The planner adds one cheap, fast LLM call before the fan-out and can eliminate several seconds of parallel I/O when retrieval is unnecessary. The fallback guarantee (all nodes activate on failure) means the planner cannot make the system worse — worst case is pre-planner behaviour. Rule-based routing was rejected because intent classification alone is too coarse: both "how did NVDA do last week?" and "what did NVDA management say about margins in Q2 earnings?" classify as `stock_analysis`, but only the second warrants RAG retrieval.
+
+**Tradeoffs Accepted:** One additional LLM call per `stock_analysis` query (~100 ms on Groq free tier). New state fields: `retrieval_plan` (dict) and `planner_error` (str or None). Workflow topology change: `route_after_fetch_price` now routes to `plan_retrieval` instead of directly to the fan-out for all non-chart intents. The planner's decision is logged at INFO level for LangSmith trace inspection.

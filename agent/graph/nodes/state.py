@@ -214,7 +214,9 @@ class AgentState(TypedDict, total=False):
     # Aggregate sentiment counts:
     #   total_posts_analyzed, bullish_count, bearish_count, neutral_count,
     #   bullish_percentage, bearish_percentage, neutral_percentage,
-    #   subreddits_searched
+    #   subreddits_searched,
+    #   sources: {reddit: {posts, bullish, bearish, neutral},
+    #             stocktwits: {posts, bullish, bearish, neutral}}
     # None if retrieval failed.
     # Read by: Node 9.
 
@@ -307,4 +309,20 @@ class AgentState(TypedDict, total=False):
 
     synthesizer_error: Optional[str]
     # Written by Node 9 if response generation fails. None on success.
+
+    # -------------------------------------------------------------------------
+    # Retrieval Planner (Phase 5)
+    # Reads: user_message, intent, date_context, ticker
+    # -------------------------------------------------------------------------
+
+    retrieval_plan: Optional[dict]
+    # LLM-decided activation flags for the parallel retrieval fan-out.
+    # Keys: fetch_news (bool), fetch_sentiment (bool), fetch_rag (bool).
+    # If the planner fails, all three default to True (baseline behaviour).
+    # Read by: route_after_plan_retrieval in workflow.py.
+
+    planner_error: Optional[str]
+    # Written by the Retrieval Planner if the LLM call fails. None on success.
+    # A non-None value here does NOT stop execution — the fallback plan
+    # (all nodes active) is used instead.
 

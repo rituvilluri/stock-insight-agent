@@ -204,9 +204,9 @@ def _build_synthesis_prompt(state: AgentState) -> str:
         article_lines = []
         for i, a in enumerate(news_articles[:8], 1):
             pub = a.get("published_date", "")
-            snippet = a.get("snippet", "")[:250]
+            snippet = a.get("snippet", "")[:600]
             article_lines.append(
-                f"{i}. [{a.get('title')}] — {a.get('source_name')} ({pub})\n   {snippet}"
+                f"[{i}] {a.get('title')} — {a.get('source_name')} ({pub})\n   {snippet}"
             )
         sections.append(
             f"## News Articles (source: {news_source})\n" + "\n".join(article_lines)
@@ -222,16 +222,32 @@ def _build_synthesis_prompt(state: AgentState) -> str:
 
     if sentiment_summary:
         ss = sentiment_summary
-        sections.append(
-            f"## Reddit Sentiment\n"
-            f"Posts analyzed: {ss.get('total_posts_analyzed', 0)}\n"
+        sentiment_lines = [
+            f"Posts analyzed: {ss.get('total_posts_analyzed', 0)} | "
             f"Bullish: {ss.get('bullish_percentage', 0):.0f}% | "
             f"Bearish: {ss.get('bearish_percentage', 0):.0f}% | "
-            f"Neutral: {ss.get('neutral_percentage', 0):.0f}%\n"
-            f"Subreddits: {', '.join(ss.get('subreddits_searched', []))}"
-        )
+            f"Neutral: {ss.get('neutral_percentage', 0):.0f}%"
+        ]
+        sources_breakdown = ss.get("sources", {})
+        reddit_src = sources_breakdown.get("reddit", {})
+        st_src = sources_breakdown.get("stocktwits", {})
+        if reddit_src.get("posts", 0) > 0:
+            sentiment_lines.append(
+                f"Reddit ({reddit_src['posts']} posts): "
+                f"Bullish {reddit_src.get('bullish', 0)} / "
+                f"Bearish {reddit_src.get('bearish', 0)} / "
+                f"Neutral {reddit_src.get('neutral', 0)}"
+            )
+        if st_src.get("posts", 0) > 0:
+            sentiment_lines.append(
+                f"Stocktwits ({st_src['posts']} messages): "
+                f"Bullish {st_src.get('bullish', 0)} / "
+                f"Bearish {st_src.get('bearish', 0)} / "
+                f"Neutral {st_src.get('neutral', 0)}"
+            )
+        sections.append("## Social Sentiment\n" + "\n".join(sentiment_lines))
     elif sentiment_error:
-        sections.append(f"## Reddit Sentiment\nUnavailable — {sentiment_error}")
+        sections.append(f"## Social Sentiment\nUnavailable — {sentiment_error}")
 
     # ------------------------------------------------------------------
     # SEC filings (RAG) — only when date-relevant chunks are present
@@ -283,47 +299,39 @@ def _build_synthesis_prompt(state: AgentState) -> str:
     snapshot_note = ""
     if include_snapshot:
         snapshot_note = (
-            "\n\nNote: The user asked for both a historical analysis AND current conditions. "
-            "Label these clearly as separate sections. Do not imply historical patterns will repeat."
+            "\n- The user asked for both a historical period AND current conditions. "
+            "Address both — label the shift clearly (e.g., 'Currently...') but keep it prose, not a new section."
         )
 
     # ------------------------------------------------------------------
-    # Prompt — instructs reasoning, not recitation
+    # Prompt — continuous narrative, inline citations, 350-500 words
     # ------------------------------------------------------------------
     prompt = f"""\
-You are a senior equity research analyst writing a brief for an informed investor.
+You are a sharp market analyst writing a concise intelligence note for a sophisticated investor.
 
-Your task: explain what drove {company} ({ticker})'s price action during {date_context}.
+Task: explain what drove {company} ({ticker}) during {date_context}. Target 350–500 words.
 
-Do NOT list data — connect it. A good brief explains causality:
-  "Volume spiked on [date] because [news event], triggering a [move]..."
-is far more useful than "Volume was [X] on [date]."
+FORMAT:
+- Write as flowing prose. No ## headers. No bullet lists in the analysis.
+- Bold key numbers inline: **+8.3%**, **$142.50**, **2.8x** volume above baseline.
+- Cite news articles inline with [1], [2], etc. — numbers correspond to the articles listed in NEWS.
+- You may use a brief **bold label** inline to signal a topic shift (e.g., "**Sentiment** on Reddit..."), but keep the writing continuous.{snapshot_note}
 
 RULES:
-- Only cite facts present in the DATA block. Do not fill gaps from training knowledge.
-- Ground every claim in specific numbers from the data (price, %, date, volume).
-- Causality requires evidence: only assert that X caused Y if the DATA block contains
-  a news article, filing excerpt, or sentiment signal that links X to Y. If news is
-  absent, describe what the price did and note that the catalyst is unconfirmed — do
-  not infer a cause from the price action alone or from general knowledge about the company.
-- If a data dimension is missing, note it once and move on — don't dwell.
-- Lead with the most important insight, not a recitation of open/close.
-- Write in clear, professional prose. Avoid bullet lists in the narrative sections.
-- When analyst targets, short interest, or earnings timing are available, integrate
-  them into the forward-looking context — these are signals, not footnotes.{snapshot_note}
-
-Use these markdown sections (omit any section where data is entirely unavailable):
-## Price Action
-## News & Catalysts
-## Market Sentiment
-## SEC Filings
-## Options Activity
+- Lead with the single most important insight — what happened and what drove it.
+- Connect data, don't list it: "Volume surged **3.2x** on June 15 after [article title] [1]" beats "Volume was X on June 15."
+- Only cite facts from the DATA block. No training-knowledge fill-ins.
+- Causality requires evidence: a news article, filing excerpt, or sentiment signal must link cause to effect. If the catalyst is absent from the data, state what the price did and note the driver is unconfirmed.
+- SEC filing excerpts: only weave in if they directly explain a price move or catalyst visible in the data for the queried period. If the excerpts are generic boilerplate, cover a different time period, or don't connect to any observable price action, omit them silently — do not mention that filings exist.
+- If a data dimension is entirely absent, note it in one clause and move on. Do not dwell.
+- When analyst targets, short interest, or earnings timing are present, weave them into forward context — not as footnotes.
+- End with a 1–2 sentence forward view only if the data supports it.
 
 --- DATA ---
 {data_block}
 --- END DATA ---
 
-Write the analyst brief now:"""
+Write the intelligence note now:"""
 
     return prompt
 

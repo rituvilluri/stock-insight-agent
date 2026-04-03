@@ -29,9 +29,6 @@ mplfinance
 feedparser
 lxml
 
-# Reddit sentiment
-praw
-
 # Utilities
 tqdm
 pytest

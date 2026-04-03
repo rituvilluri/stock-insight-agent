@@ -5,28 +5,29 @@ Reads:  ticker, company_name, start_date, end_date, user_config,
         include_current_snapshot
 Writes: news_articles, news_source_used, news_error
 
-Three-layer architecture, tried in order:
-  1. Finnhub — REST API, ticker-filtered, date-ranged. Key from
-               user_config["finnhub_key"] or FINNHUB_API_KEY env var.
-               Free tier: 60 calls/minute, ~2 years of history.
-               Falls back to Layer 2 on missing key, empty result, or failure.
-  2. You.com Search API — Web search index with date-range filtering via
-               freshness parameter (YYYY-MM-DDtoYYYY-MM-DD). Key from
-               YOUCOM_API_KEY env var. Free tier: $100 credits.
-               Returns results.news array. Falls back to Layer 3 on missing
-               key or failure.
-  3. Google News RSS — No API key needed. Best-effort date filtering via
-               post-parse range check. Emergency fallback only.
+Three-layer architecture:
+  1. Finnhub + You.com — run in parallel when both keys are present.
+     Results are merged and deduplicated by URL (Finnhub order preserved).
+     Finnhub: REST API, ticker-filtered, date-ranged. Key from
+              user_config["finnhub_key"] or FINNHUB_API_KEY env var.
+     You.com: Web search with date freshness filter. Key from
+              YOUCOM_API_KEY env var.
+  2. Google News RSS — no API key. Emergency fallback when both
+     Layer 1 sources are absent or return nothing.
 
-If include_current_snapshot is True, a second fetch for the last 7 days
-is appended to news_articles alongside the historical set (deduped by URL).
+After retrieval, free-domain articles (reuters.com, cnbc.com, apnews.com,
+finance.yahoo.com, benzinga.com, marketwatch.com) are enriched with full
+article text via Firecrawl. Key from FIRECRAWL_API_KEY env var.
+Enrichment is skipped gracefully if no key is set — snippets fall back
+to the 600-char source excerpt.
 
-Each article dict contains:
-  title, source_name, published_date (ISO string YYYY-MM-DD), url, snippet
+If include_current_snapshot is True, a second parallel fetch for the last
+7 days is appended alongside the historical set (deduped by URL).
 """
 
 import logging
 import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta
 from urllib.parse import quote_plus
 
@@ -39,9 +40,21 @@ logger = logging.getLogger(__name__)
 
 _MAX_ARTICLES = 10
 _CURRENT_SNAPSHOT_DAYS = 7
+_SNIPPET_MAX_CHARS = 600
+_FIRECRAWL_MAX_CHARS = 2000
 _GOOGLE_NEWS_RSS = "https://news.google.com/rss/search?q={query}&hl=en-US&gl=US&ceid=US:en"
 _FINNHUB_NEWS_URL = "https://finnhub.io/api/v1/company-news"
 _YOUCOM_SEARCH_URL = "https://ydc-index.io/v1/search"
+_FIRECRAWL_SCRAPE_URL = "https://api.firecrawl.dev/v1/scrape"
+
+_FREE_DOMAINS = {
+    "reuters.com",
+    "cnbc.com",
+    "apnews.com",
+    "finance.yahoo.com",
+    "benzinga.com",
+    "marketwatch.com",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -56,12 +69,16 @@ def _get_youcom_key(user_config: dict) -> str | None:
     return user_config.get("youcom_api_key") or os.getenv("YOUCOM_API_KEY")
 
 
+def _get_firecrawl_key(user_config: dict) -> str | None:
+    return user_config.get("firecrawl_key") or os.getenv("FIRECRAWL_API_KEY")
+
+
 # ---------------------------------------------------------------------------
 # Query builder (shared)
 # ---------------------------------------------------------------------------
 
 def _build_query(ticker: str, company_name: str) -> str:
-    """Build a search query that matches ticker OR company name (for RSS)."""
+    """Build a search query that matches ticker OR company name."""
     parts = []
     if ticker:
         parts.append(ticker)
@@ -71,7 +88,7 @@ def _build_query(ticker: str, company_name: str) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Layer 1: Finnhub
+# Layer 1a: Finnhub
 # ---------------------------------------------------------------------------
 
 def _fetch_finnhub(
@@ -81,18 +98,12 @@ def _fetch_finnhub(
     api_key: str,
 ) -> list | None:
     """
-    Query Finnhub /company-news endpoint.
-    Returns a normalised article list on success, None on failure or empty.
+    Query Finnhub /company-news. Returns normalised articles or None on failure/empty.
     """
     try:
         resp = requests.get(
             _FINNHUB_NEWS_URL,
-            params={
-                "symbol": ticker,
-                "from": start_date,
-                "to": end_date,
-                "token": api_key,
-            },
+            params={"symbol": ticker, "from": start_date, "to": end_date, "token": api_key},
             timeout=10,
         )
         if resp.status_code != 200:
@@ -106,9 +117,11 @@ def _fetch_finnhub(
 
         articles = []
         for item in data[:_MAX_ARTICLES]:
-            # datetime is a Unix timestamp
             try:
-                published = datetime.fromtimestamp(item["datetime"], tz=datetime.now().astimezone().tzinfo).strftime("%Y-%m-%d")
+                published = datetime.fromtimestamp(
+                    item["datetime"],
+                    tz=datetime.now().astimezone().tzinfo,
+                ).strftime("%Y-%m-%d")
             except (KeyError, TypeError, OSError):
                 published = ""
 
@@ -117,7 +130,7 @@ def _fetch_finnhub(
                 "source_name": item.get("source") or "",
                 "published_date": published,
                 "url": item.get("url") or "",
-                "snippet": (item.get("summary") or "")[:300],
+                "snippet": (item.get("summary") or "")[:_SNIPPET_MAX_CHARS],
             })
 
         return articles if articles else None
@@ -128,7 +141,7 @@ def _fetch_finnhub(
 
 
 # ---------------------------------------------------------------------------
-# Layer 2: You.com Search API
+# Layer 1b: You.com Search API
 # ---------------------------------------------------------------------------
 
 def _fetch_youcom(
@@ -139,10 +152,8 @@ def _fetch_youcom(
     api_key: str,
 ) -> list | None:
     """
-    Query the You.com Search API for news articles in the given date range.
-
-    Uses the freshness parameter (YYYY-MM-DDtoYYYY-MM-DD) for server-side
-    date filtering. Returns results.news from the response.
+    Query the You.com Search API with date freshness filter.
+    Returns normalised articles or None on failure/empty.
     """
     name_part = f'"{company_name}"' if company_name and company_name.lower() != ticker.lower() else ""
     query = f"{ticker} {name_part} stock news".strip()
@@ -152,11 +163,7 @@ def _fetch_youcom(
         resp = requests.get(
             _YOUCOM_SEARCH_URL,
             headers={"X-API-Key": api_key},
-            params={
-                "query": query,
-                "freshness": freshness,
-                "count": _MAX_ARTICLES,
-            },
+            params={"query": query, "freshness": freshness, "count": _MAX_ARTICLES},
             timeout=10,
         )
         if resp.status_code != 200:
@@ -170,16 +177,14 @@ def _fetch_youcom(
 
         articles = []
         for item in news_items:
-            # page_age is ISO 8601 datetime — trim to YYYY-MM-DD
             page_age = item.get("page_age") or ""
             published_date = page_age[:10] if len(page_age) >= 10 else ""
-
             articles.append({
                 "title": item.get("title") or "",
                 "source_name": item.get("url", "").split("/")[2] if item.get("url") else "",
                 "published_date": published_date,
                 "url": item.get("url") or "",
-                "snippet": (item.get("description") or "")[:300],
+                "snippet": (item.get("description") or "")[:_SNIPPET_MAX_CHARS],
             })
 
         logger.info("You.com → %d news articles for %s", len(articles), ticker)
@@ -191,7 +196,7 @@ def _fetch_youcom(
 
 
 # ---------------------------------------------------------------------------
-# Layer 3: Google News RSS (emergency fallback)
+# Layer 2: Google News RSS (emergency fallback)
 # ---------------------------------------------------------------------------
 
 def _fetch_google_rss(
@@ -201,8 +206,8 @@ def _fetch_google_rss(
     end_date: str,
 ) -> list | None:
     """
-    Query Google News RSS. Date filtering is best-effort (post-parse range check).
-    Returns a normalised article list on success, None on failure or empty.
+    Query Google News RSS. Date filtering is best-effort (post-parse check).
+    Returns normalised articles or None on failure/empty.
     """
     try:
         query = _build_query(ticker, company_name)
@@ -221,9 +226,6 @@ def _fetch_google_rss(
             end_dt = None
 
         articles = []
-        total_entries = len(feed.entries[:_MAX_ARTICLES * 2])
-        skipped_out_of_range = 0
-
         for entry in feed.entries[:_MAX_ARTICLES * 2]:
             published_dt = None
             if entry.get("published_parsed"):
@@ -233,14 +235,12 @@ def _fetch_google_rss(
                 if not (start_dt <= published_dt <= end_dt):
                     continue
 
-            published_str = published_dt.strftime("%Y-%m-%d") if published_dt else ""
-
             articles.append({
                 "title": entry.get("title") or "",
                 "source_name": (entry.get("source") or {}).get("title") or "Google News",
-                "published_date": published_str,
+                "published_date": published_dt.strftime("%Y-%m-%d") if published_dt else "",
                 "url": entry.get("link") or "",
-                "snippet": (entry.get("summary") or "")[:300],
+                "snippet": (entry.get("summary") or "")[:_SNIPPET_MAX_CHARS],
             })
 
             if len(articles) >= _MAX_ARTICLES:
@@ -258,7 +258,7 @@ def _fetch_google_rss(
 
 
 # ---------------------------------------------------------------------------
-# Relevance filter — keep only articles mentioning the stock
+# Relevance filter
 # ---------------------------------------------------------------------------
 
 def _filter_relevant_articles(
@@ -268,40 +268,84 @@ def _filter_relevant_articles(
 ) -> list:
     """
     Remove articles that don't mention the stock in their title or snippet.
-
-    Finnhub's /company-news endpoint tags articles at the sector level, not
-    strictly at the company level — so queries for NVDA regularly return
-    articles about Tesla, Palantir, Camping World, etc.  This filter ensures
-    only articles with at least one mention of the ticker OR the company name
-    (case-insensitive) pass through.
-
-    We check title first (higher signal) then snippet (lower signal but still
-    acceptable — many articles mention the company briefly in the lede).
-    Returns the filtered list; never returns None.
+    Finnhub tags articles at sector level, so off-topic articles regularly appear.
     """
     if not articles:
         return []
 
     ticker_lower = ticker.lower()
-    # Strip common suffixes for partial match: "NVIDIA Corporation" → also match "NVIDIA"
     company_lower = company_name.lower() if company_name else ticker_lower
-    # Use the first word of the company name as a shorter match anchor
-    # e.g. "Alphabet (Google)" → "alphabet", "NVIDIA" → "nvidia"
     company_primary = company_lower.split()[0] if company_lower else ticker_lower
 
-    relevant = []
-    for article in articles:
-        title = (article.get("title") or "").lower()
-        snippet = (article.get("snippet") or "").lower()
-        haystack = title + " " + snippet
-        if ticker_lower in haystack or company_primary in haystack:
-            relevant.append(article)
-
-    return relevant
+    return [
+        a for a in articles
+        if ticker_lower in (a.get("title") or "").lower() + " " + (a.get("snippet") or "").lower()
+        or company_primary in (a.get("title") or "").lower() + " " + (a.get("snippet") or "").lower()
+    ]
 
 
 # ---------------------------------------------------------------------------
-# Shared fetch orchestrator
+# Firecrawl enrichment (free-domain articles only)
+# ---------------------------------------------------------------------------
+
+def _is_free_domain(url: str) -> bool:
+    """Return True if the article URL belongs to a free-access domain."""
+    return any(domain in url for domain in _FREE_DOMAINS)
+
+
+def _enrich_with_firecrawl(article: dict, api_key: str) -> dict:
+    """
+    Fetch full article text via Firecrawl for a single free-domain article.
+    Returns the article with snippet replaced by full markdown text.
+    Returns the original article unchanged on any failure.
+    """
+    url = article.get("url", "")
+    if not url or not _is_free_domain(url):
+        return article
+
+    try:
+        resp = requests.post(
+            _FIRECRAWL_SCRAPE_URL,
+            headers={"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"},
+            json={"url": url, "formats": ["markdown"]},
+            timeout=15,
+        )
+        if resp.status_code != 200:
+            return article
+
+        markdown = (resp.json().get("data") or {}).get("markdown") or ""
+        if markdown:
+            return {**article, "snippet": markdown[:_FIRECRAWL_MAX_CHARS]}
+        return article
+
+    except Exception as e:
+        logger.warning("Firecrawl enrichment failed for %s: %s", url, e)
+        return article
+
+
+def _enrich_articles(articles: list, api_key: str | None) -> list:
+    """
+    Enrich free-domain articles with full text via Firecrawl (parallel).
+    Skips enrichment entirely if no API key is configured.
+    """
+    if not api_key or not articles:
+        return articles
+
+    with ThreadPoolExecutor(max_workers=5) as executor:
+        enriched = list(executor.map(lambda a: _enrich_with_firecrawl(a, api_key), articles))
+
+    enriched_count = sum(
+        1 for orig, enr in zip(articles, enriched)
+        if orig.get("snippet") != enr.get("snippet")
+    )
+    if enriched_count:
+        logger.info("_enrich_articles: enriched %d/%d articles via Firecrawl", enriched_count, len(articles))
+
+    return enriched
+
+
+# ---------------------------------------------------------------------------
+# Parallel fetch orchestrator
 # ---------------------------------------------------------------------------
 
 def _fetch_articles(
@@ -313,24 +357,59 @@ def _fetch_articles(
     youcom_key: str | None,
 ) -> tuple[list | None, str]:
     """
-    Try each layer in order. Returns (articles, source_label).
+    Run Finnhub and You.com in parallel. Merge results, deduplicate by URL
+    (Finnhub order preserved). Fall back to Google RSS if both return nothing.
+    Returns (articles, source_label).
     """
-    if finnhub_key:
-        articles = _fetch_finnhub(ticker, start_date, end_date, finnhub_key)
-        if articles is not None:
-            logger.info("_fetch_articles [finnhub] → %d articles", len(articles))
-            return articles, "finnhub"
+    finnhub_articles = None
+    youcom_articles = None
 
-    if youcom_key:
-        articles = _fetch_youcom(ticker, company_name, start_date, end_date, youcom_key)
-        if articles is not None:
-            logger.info("_fetch_articles [youcom] → %d articles", len(articles))
-            return articles, "youcom"
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        fh_future = (
+            executor.submit(_fetch_finnhub, ticker, start_date, end_date, finnhub_key)
+            if finnhub_key else None
+        )
+        ydc_future = (
+            executor.submit(_fetch_youcom, ticker, company_name, start_date, end_date, youcom_key)
+            if youcom_key else None
+        )
 
-    articles = _fetch_google_rss(ticker, company_name, start_date, end_date)
-    if articles is not None:
-        logger.info("_fetch_articles [google_rss] → %d articles", len(articles))
-        return articles, "google_rss"
+        if fh_future:
+            try:
+                finnhub_articles = fh_future.result()
+            except Exception as e:
+                logger.warning("Finnhub parallel fetch error: %s", e)
+
+        if ydc_future:
+            try:
+                youcom_articles = ydc_future.result()
+            except Exception as e:
+                logger.warning("You.com parallel fetch error: %s", e)
+
+    # Merge, dedup by URL
+    merged = []
+    seen_urls: set[str] = set()
+    sources_used = []
+
+    for source_name, articles in [("finnhub", finnhub_articles), ("youcom", youcom_articles)]:
+        if articles:
+            sources_used.append(source_name)
+            for a in articles:
+                url = a.get("url", "")
+                if url not in seen_urls:
+                    seen_urls.add(url)
+                    merged.append(a)
+
+    if merged:
+        label = "+".join(sources_used)
+        logger.info("_fetch_articles [%s] → %d merged articles", label, len(merged))
+        return merged, label
+
+    # Fall back to Google RSS
+    rss = _fetch_google_rss(ticker, company_name, start_date, end_date)
+    if rss:
+        logger.info("_fetch_articles [google_rss] → %d articles", len(rss))
+        return rss, "google_rss"
 
     return None, "none"
 
@@ -342,7 +421,8 @@ def _fetch_articles(
 def retrieve_news(state: AgentState) -> AgentState:
     """
     Fetch news articles for the given ticker and date range.
-    Tries Finnhub → FMP → Google RSS in order.
+    Runs Finnhub + You.com in parallel, falls back to Google RSS.
+    Enriches free-domain articles with full text via Firecrawl.
     Appends current-snapshot articles if include_current_snapshot is True.
     """
     ticker = state.get("ticker", "")
@@ -355,6 +435,7 @@ def retrieve_news(state: AgentState) -> AgentState:
     try:
         finnhub_key = _get_finnhub_key(user_config)
         youcom_key = _get_youcom_key(user_config)
+        firecrawl_key = _get_firecrawl_key(user_config)
 
         articles, source_used = _fetch_articles(
             ticker, company_name, start_date, end_date, finnhub_key, youcom_key
@@ -364,9 +445,9 @@ def retrieve_news(state: AgentState) -> AgentState:
             articles = []
             logger.warning("retrieve_news: all sources returned no articles")
 
-        # Filter to only articles that mention this stock
         articles = _filter_relevant_articles(articles, ticker, company_name)
-        logger.info("retrieve_news: %d relevant articles after filter", len(articles))
+        articles = _enrich_articles(articles, firecrawl_key)
+        logger.info("retrieve_news: %d relevant articles after filter+enrich", len(articles))
 
         # Current snapshot — append last 7 days if requested
         if include_current:
@@ -378,15 +459,14 @@ def retrieve_news(state: AgentState) -> AgentState:
             )
 
             if snapshot_articles:
-                snapshot_articles = _filter_relevant_articles(
-                    snapshot_articles, ticker, company_name
-                )
+                snapshot_articles = _filter_relevant_articles(snapshot_articles, ticker, company_name)
+                snapshot_articles = _enrich_articles(snapshot_articles, firecrawl_key)
                 existing_urls = {a["url"] for a in articles}
                 for a in snapshot_articles:
                     if a["url"] not in existing_urls:
                         articles.append(a)
                 logger.info(
-                    "retrieve_news: appended %d current-snapshot articles after filter",
+                    "retrieve_news: appended %d current-snapshot articles",
                     len(snapshot_articles),
                 )
 
