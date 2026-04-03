@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 DATASET_NAME = "stock-insight-agent-baseline"
-EXPERIMENT_NAME = "all-nodes-wired"
+EXPERIMENT_NAME = "post-phase5-planner-rag-date-fixes"
 
 
 def run_graph(inputs: dict) -> dict:
@@ -60,10 +60,9 @@ if __name__ == "__main__":
         evaluators=ALL_EVALUATORS,
         experiment_prefix=EXPERIMENT_NAME,
         description=(
-            "Full pipeline: all 8 nodes wired (intent, ticker, date, price, news, "
-            "reddit, RAG, options). Hallucination evaluator upgraded to llama-3.3-70b "
-            "with graded 1-5 rubric. Compare against baseline-4d729529 for "
-            "pre/post Phase 2-3 quality delta."
+            "Post-phase5 eval regression fixes: planner always fetch_rag=true "
+            "for stock_analysis, synthesizer prompt skips irrelevant filing chunks, "
+            "date parser window reduced 4mo->75 days to prevent Q3/Q4 bleed."
         ),
         max_concurrency=1,   # sequential — avoids Groq rate limits
     )

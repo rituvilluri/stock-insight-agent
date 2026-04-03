@@ -1,96 +1,65 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
-
-## Collaboration Style
-- User is learning Claude Code best practices. When a more optimal tool, workflow, or approach is available, suggest it proactively with a brief explanation of why.
-- After any meaningful implementation, prompt the user to update docs/TDD.md, docs/PRD.md, or docs/DecisionLog.md where relevant. "Meaningful" means: new node, changed routing logic, new state fields, new external dependency, architectural trade-off made, or scope change. Do not prompt for minor bug fixes or styling changes.
+This file provides guidance to Claude Code when working with this repository.
 
 ## Project
-AI-powered stock analysis agent. Portfolio project targeting AI engineering and AI PM roles.
-Single-agent LangGraph architecture. NOT multi-agent.
 
-## Documentation (read before implementing anything)
-- docs/TDD.md: Source of truth for architecture, node specs, state schema, routing logic
-- docs/PRD.md: Source of truth for feature scope and acceptance criteria
-- docs/DecisionLog.md: 17 ADR-format architectural decisions
+AI-powered stock analysis agent. Portfolio project targeting AI engineering and AI PM roles.
+
+**Architecture:** Single-agent LangGraph workflow with adaptive parallel retrieval orchestration. One graph drives intent classification → ticker and date resolution → parallel multi-source data retrieval fan-out (news, sentiment, SEC filings, options) → narrative synthesis. Each node is a plain Python function. No sub-agents, no tool-calling loops.
 
 ## Current Codebase State
-All Phase 1–4 nodes are complete and wired into the workflow. The codebase is in active eval and improvement mode (phase3/testing-langsmith branch).
 
-## Build Sequence (completed through Phase 4)
-Read docs/TDD.md for full node specs before implementing any new node.
-Done when: all tests in tests/test_<node>.py pass and the node is committed.
+Phases 1–4 complete. Phase 5 is active: quality improvements across Node 6 (sentiment), Node 5 (news), response synthesizer, date parser, and a new retrieval planning node.
 
-### Phase 1: Core Foundation ✅
-1. ✅ agent/graph/nodes/state.py (AgentState TypedDict, all fields)
-2. ✅ agent/graph/nodes/intent_classifier.py + tests/test_intent_classifier.py
-3. ✅ agent/graph/nodes/ticker_resolver.py + tests/test_ticker_resolver.py
-4. ✅ agent/graph/nodes/date_parser.py + tests/test_date_parser.py
-5. ✅ agent/graph/nodes/data_fetcher.py + tests/test_data_fetcher.py
-6. ✅ agent/graph/nodes/chart_generator.py + tests/test_chart_generator.py
-7. ✅ agent/graph/nodes/response_synthesizer.py + tests/test_response_synthesizer.py
-8. ✅ agent/graph/workflow.py (all nodes wired with conditional edges)
-9. ✅ app/chainlit/app.py (streaming via astream_events, Gemini thinking-chunk handling)
-10. ✅ LangSmith tracing (LANGCHAIN_TRACING_V2, LANGCHAIN_PROJECT set in .env)
+**Phase 5 is the improvement and eval phase** — every change to an existing node requires updating its tests and re-running a LangSmith experiment before the story is closed.
 
-### Phase 2: Multi-Source Intelligence ✅
-- ✅ Session context memory (app.py + date_parser.py guard)
-- ✅ Node 5: news_retriever.py + tests/test_news_retriever.py (Finnhub → You.com → Google RSS)
-- ✅ Node 6: reddit_sentiment.py + tests/test_reddit_sentiment.py
-- ✅ workflow.py updated (Nodes 5 and 6 wired; parallel fan-out via Send())
+## Documentation
 
-### Phase 3: RAG Pipeline ✅
-- ✅ Node 7: rag_retriever.py + tests/test_rag_retriever.py
-  - SEC EDGAR on-demand ingestion (10-K, 10-Q; 8-K deferred to next iteration)
-  - ChromaDB embedded mode (data/vector_store), Google Gemini embeddings
-  - Wired into stock_analysis fan-out alongside nodes 5 and 6
+Four sources of truth — do not duplicate content between them:
 
-### Phase 4: Options + Enrichment ✅
-- ✅ Node 8: options_analyzer.py + tests/test_options_analyzer.py
-  - Black-Scholes Greeks (stdlib only), Max Pain, put/call ratio, top-volume strikes
-- ✅ Node 4 enrichments: analyst_data, short_interest, next_earnings_date, days_until_earnings
+| File | Owns |
+|------|------|
+| `docs/TDD.md` | Architecture, node specs, state schema, routing logic |
+| `docs/PRD.md` | Feature scope and acceptance criteria |
+| `docs/DecisionLog.md` | Architectural decisions in ADR format (17 entries) |
+| `CLAUDE.md` | Claude Code behavior, workflows, conventions |
 
-### Phase 5: Deployment (upcoming)
+Notion mirrors these as PM-level narrative — see Notion Workflow section.
+
+## Build Sequence
+
+### Phases 1–4 ✅ (complete)
+
+All 10 nodes wired and tested. Key files:
+- `agent/graph/nodes/state.py` — AgentState TypedDict (all fields)
+- `agent/graph/nodes/intent_classifier.py` — Node 1
+- `agent/graph/nodes/ticker_resolver.py` — Node 2
+- `agent/graph/nodes/date_parser.py` — Node 3
+- `agent/graph/nodes/data_fetcher.py` — Node 4 (price, analyst data, short interest, earnings)
+- `agent/graph/nodes/news_retriever.py` — Node 5 (Finnhub → You.com → Google RSS)
+- `agent/graph/nodes/reddit_sentiment.py` — Node 6 (Reddit public JSON + Stocktwits)
+- `agent/graph/nodes/rag_retriever.py` — Node 7 (SEC EDGAR, ChromaDB, Gemini embeddings)
+- `agent/graph/nodes/options_analyzer.py` — Node 8 (Black-Scholes, Max Pain, put/call ratio)
+- `agent/graph/nodes/response_synthesizer.py` — Node 9 (Gemini 2.5 Flash, thinking enabled)
+- `agent/graph/nodes/chart_generator.py` — Node 10 (Plotly candlestick)
+- `agent/graph/workflow.py` — LangGraph graph with conditional edges and Send() fan-out
+
+### Phase 5: Quality + Deployment (active)
+
+- ✅ Node 6 rewrite — replace PRAW with Reddit public JSON + Stocktwits as co-primary source
+- ✅ Node 5 upgrade — parallel Finnhub+You.com fetch, Firecrawl enrichment for free-domain articles
+- ✅ Response synthesizer prompt redesign — sharp narrative tone, inline [1][2] citations, 350–500 words
+- ⬜ Date parser fix — fiscal calendar awareness for earnings queries (anchor to next_earnings_date)
+- ⬜ Retrieval planning node — LLM-driven; outputs retrieval_plan dict; requires workflow.py changes (coordinate in same session — see Rules)
 - ⬜ Docker containerization
 - ⬜ Azure deployment + GitHub Actions CI/CD
 - ⬜ ChromaDB Cloud migration (1GB free tier, same API)
 
-## LLM Config (llm/llm_setup.py)
-- `llm_classifier`: Groq `llama-3.1-8b-instant`, temperature=0, max_tokens=256
-  - Used by: Intent Classifier, Ticker Resolver, Date Parser (structured JSON output)
-- `llm_synthesizer`: Google Gemini 2.5 Flash, temperature=0.3, max_output_tokens=4096, thinking_budget=1024
-  - Used by: Response Synthesizer (narrative synthesis across multi-source data)
-  - Streaming enabled; Chainlit handles thinking-phase chunk format from Gemini
-
-## Rules
-- Read docs/TDD.md before implementing any node
-- One node per session; write unit tests alongside each node
-- Do NOT touch workflow.py while implementing individual nodes
-- Commit after each node passes tests (no Co-Authored-By in commit messages or PRs)
-- No LangChain Tool wrappers; use direct Python function calls
-- No print statements in node files; use logging
-- All nodes must write to their *_error state field on failure
-
-Every node file must follow this structure:
-```python
-import logging
-from agent.graph.nodes.state import AgentState
-
-logger = logging.getLogger(__name__)
-
-def <node_name>(state: AgentState) -> AgentState:
-    try:
-        # ... logic here ...
-        return {**state, "<output_field>": result, "<node>_error": None}
-    except Exception as e:
-        logger.error(f"<node_name> failed: {e}")
-        return {**state, "<node>_error": str(e)}
-```
-
 ## Commands
+
 ```bash
-# Activate virtual environment first (required before any other command)
+# Activate virtual environment (required before any other command)
 source .venv/bin/activate
 
 # Run the app
@@ -106,43 +75,232 @@ PYTHONPATH=. pytest tests/test_intent_classifier.py -v
 PYTHONPATH=. python tests/evaluators/run_experiment.py
 ```
 
-## LangSmith Experiment Naming
-Before running `run_experiment.py`, always update `EXPERIMENT_NAME` in that file to a descriptive name reflecting what changed. Format: `<what-changed>` (kebab-case, no version numbers).
+## LLM Config (`llm/llm_setup.py`)
 
-Examples:
-- `post-intent-label-fix`
-- `post-rag-threshold-tuning`
-- `vertex-claude-synthesizer-trial`
-- `post-hallucination-prompt-update`
+Three distinct roles — never swap models between roles without updating this section:
 
-Never run an experiment with the stale name from the previous run. A good name makes the LangSmith experiment list readable without opening each one.
+- **`llm_classifier`** — Groq `llama-3.1-8b-instant`, temperature=0, max_tokens=256
+  - Nodes: Intent Classifier (1), Ticker Resolver (2), Date Parser (3), Reddit/Stocktwits sentiment batches (6)
+  - Produces structured JSON; fast and cheap
 
-## Environment Variables (.env)
+- **`llm_synthesizer`** — Google Gemini 2.5 Flash, temperature=0.3, max_output_tokens=4096, thinking_budget=1024
+  - Node: Response Synthesizer (9)
+  - Streaming enabled; Chainlit handles Gemini thinking-chunk format
+  - `thinking_budget=1024` gives the model an internal reasoning pass before the final response
+
+- **`llm_planner`** (Phase 5, new) — Groq `llama-3.1-8b-instant`, temperature=0, max_tokens=512
+  - Node: Retrieval Planning Node
+  - Lightweight decision: which data nodes to activate based on query signals
+
+## MCP Connections
+
+Available integrations — use these proactively when the task maps to their domain. Do not substitute web search or file reads when an MCP handles it directly.
+
+| MCP | Connects to | When to use |
+|-----|-------------|-------------|
+| `mcp__atlassian` | JIRA project: **STOCK** | Starting/closing stories, checking sprint, adding eval result comments |
+| `mcp__notionApi` | Notion: **Stock Insight Agent** workspace | Updating docs at phase milestones — see Notion Workflow |
+| `mcp__langsmith` | LangSmith | Fetching experiment runs, comparing eval results, pushing prompts to Hub |
+| `mcp__github` | GitHub repo | Opening PRs, checking CI status, reviewing PR comments |
+| `mcp__plugin_playwright` | Browser (Chromium) | Fallback when WebFetch returns 403 or hits a paywall; UI testing |
+| `mcp__plugin_context7` | Live library docs | Fetch current LangGraph, Chainlit, LangSmith SDK docs before implementing against an unfamiliar API |
+
+## Environment Variables (`.env`)
+
 ```
-GROQ_API_KEY=                    # Required — llm_classifier (llama-3.1-8b-instant)
-GEMINI_API_KEY=                  # Required — llm_synthesizer (Gemini 2.5 Flash) + RAG embeddings
-ALPHA_VANTAGE_API_KEY=           # Optional — fallback for stock price data
-FINNHUB_API_KEY=                 # Node 5 Layer 1 — primary news (60 calls/min free, ~2yr history)
-YOUCOM_API_KEY=                  # Node 5 Layer 2 — You.com Search API (fallback when Finnhub misses)
-REDDIT_CLIENT_ID=                # Node 6
-REDDIT_CLIENT_SECRET=            # Node 6
-REDDIT_USER_AGENT=stock-insight-agent/1.0  # Node 6
-CHROMA_PERSIST_DIR=data/vector_store       # Node 7 — local ChromaDB (migrates to Cloud at Phase 5)
+# Required
+GROQ_API_KEY=                    # llm_classifier + Node 6 sentiment batches
+GEMINI_API_KEY=                  # llm_synthesizer (Gemini 2.5 Flash) + RAG embeddings
+
+# Data — Node 4
+ALPHA_VANTAGE_API_KEY=           # Optional — fallback price data when yfinance fails
+
+# News — Node 5
+FINNHUB_API_KEY=                 # Layer 1 — primary news (60 calls/min free, ~2yr history)
+YOUCOM_API_KEY=                  # Layer 2 — runs in parallel when Finnhub returns <5 results
+FIRECRAWL_API_KEY=               # Required for quality — full-text article enrichment; without it
+                                 # synthesis degrades to 300-char snippets (500 credits/month free)
+
+# Sentiment — Node 6
+# Reddit: no key required — uses public JSON endpoints (reddit.com/r/*/search.json)
+# Stocktwits: no key required — uses public stream (api.stocktwits.com/api/2/streams/symbol/{ticker}.json)
+
+# RAG — Node 7
+CHROMA_PERSIST_DIR=data/vector_store   # Local ChromaDB (migrates to Cloud at Phase 5 deployment)
+
+# Observability
 LANGSMITH_API_KEY=               # LangSmith tracing + evals
-LANGCHAIN_TRACING_V2=true        # LangSmith tracing
-LANGCHAIN_PROJECT=stock-insight-agent      # LangSmith project name
+LANGCHAIN_TRACING_V2=true
+LANGCHAIN_PROJECT=stock-insight-agent
 ```
 
-## Git Commit Format
+## Rules
+
+- Read `docs/TDD.md` before implementing any node
+- Write unit tests alongside every node change — done means tests pass
+- **workflow.py rule:** Do not touch during isolated node work. Exception: the retrieval planning node requires workflow.py changes by design — coordinate both in the same session
+- No Co-Authored-By in commits or PRs
+- No LangChain Tool wrappers — use direct Python function calls
+- No `print()` in node files — use `logging`
+- All nodes must write to their `*_error` state field on failure
+- When improving an existing node, update its tests and re-run the LangSmith experiment before closing the story
+
+**Required node file structure:**
+
+```python
+import logging
+from agent.graph.nodes.state import AgentState
+
+logger = logging.getLogger(__name__)
+
+def <node_name>(state: AgentState) -> AgentState:
+    try:
+        # ... logic here ...
+        return {**state, "<output_field>": result, "<node>_error": None}
+    except Exception as e:
+        logger.error(f"<node_name> failed: {e}")
+        return {**state, "<node>_error": str(e)}
+```
+
+## Git Practices
+
+**Branch naming:**
+```
+feat/<node-name>         # new node or major feature
+fix/<what>               # targeted bug fix
+refactor/<what>          # refactor without behavior change
+phase<N>/<description>   # multi-node phase branch (e.g. phase5/sentiment-rewrite)
+```
+
+**Commit timing:** After each passing test suite — not at end of session. Small, focused commits make rollback easy and history readable.
+
+**Commit format:**
 ```
 feat: implement <node_name> node
-refactor: migrate <tool> into <node_name> node
-test: add tests for <node_name>
+refactor: improve <what> in <node_name>
+test: add/update tests for <node_name>
 fix: <what was broken>
 chore: <housekeeping>
 ```
 
+**Push + open PR:** When a complete story is done — tests pass, LangSmith eval run complete, docs updated. Not mid-story.
+
+**PR description:**
+```
+## Summary
+- What changed and why (2–3 bullets)
+- JIRA: STOCK-XXX
+
+## Test plan
+- [ ] Unit tests pass
+- [ ] LangSmith experiment: <experiment-name>
+- [ ] Relevant docs updated
+```
+
+**Main branch:** Never force-push to `master`. Never commit directly — always via PR.
+
+## Story Workflow (end-to-end)
+
+The complete loop for every unit of work — follow this order:
+
+```
+1. Pull story from JIRA STOCK sprint
+   → mcp__atlassian: transition story to In Progress
+
+2. Read the relevant docs/TDD.md section before writing code
+
+3. Create branch
+   → git checkout -b feat/<node-name>
+
+4. Implement + write/update tests
+   → mcp__ide__getDiagnostics to catch type errors early
+
+5. Update EXPERIMENT_NAME in run_experiment.py, then run eval
+   → PYTHONPATH=. python tests/evaluators/run_experiment.py
+   → mcp__langsmith: verify results vs. prior experiment
+
+6. Commit
+   → feat/fix/refactor/test/chore: <what changed>
+
+7. Open PR
+   → mcp__github: include STOCK-XXX and experiment name in description
+
+8. PR merged → close JIRA story
+   → mcp__atlassian: transition to Done, add comment with experiment name + one-line result
+
+9. Update repo docs if applicable
+   → docs/TDD.md for node spec changes
+   → docs/DecisionLog.md for any architectural decisions made during the story
+
+10. Update Notion if this closes a phase milestone
+    → see Notion Workflow below
+```
+
+## JIRA Workflow (project: STOCK)
+
+**Structure:**
+- Epic = Phase (e.g., "Phase 5: Quality + Deployment")
+- Story = one node improvement or feature
+- Sub-task = individual implementation piece (node file, test file, doc update)
+
+**Before starting a story it must have:**
+- Acceptance criteria — what does "done" look like?
+- Link to the relevant `docs/TDD.md` section
+- Planned LangSmith experiment name — required only for stories that change node logic, prompts, or data sources. Set before writing code so "done" is measurable, not subjective.
+
+**Status transitions:**
+- `Backlog` → `To Do` during sprint planning
+- `To Do` → `In Progress` when implementation begins
+- `In Progress` → `Done` after PR merges and eval results are acceptable
+
+**Commenting:** After the LangSmith run, add a comment to the JIRA story: experiment name + one-line result summary. This keeps the sprint review self-documenting without needing separate notes.
+
+## Notion Workflow (Space: Stock Insight Agent)
+
+Notion is the PM-level narrative layer — plain English summaries for review and portfolio presentation. Repo `docs/` files are the technical source of truth. Summarize in Notion; do not duplicate specs.
+
+Always fetch the current page content via `mcp__notionApi` before editing to avoid overwriting existing content.
+
+| Notion Page | Update when |
+|-------------|-------------|
+| **Technical Design Document** | A phase completes; a node interface changes significantly; a new node is added |
+| **Decision Log** | Every entry added to `docs/DecisionLog.md` — copy decision + rationale in plain English |
+| **Product Requirement Document** | Scope changes; a feature is deferred or removed; acceptance criteria shift |
+| **Roadmap** | Phase boundaries; deployment timeline updates; major scope decisions |
+
+**Minimum update at phase close:** Update Technical Design Document with a phase summary (what shipped, what was deferred) and Roadmap with next phase status.
+
+## LangSmith Evaluation Workflow
+
+Update `EXPERIMENT_NAME` in `tests/evaluators/run_experiment.py` before every run. Use kebab-case describing what changed — no version numbers:
+- `post-reddit-public-json-rewrite`
+- `post-synthesizer-prompt-redesign`
+- `post-fiscal-calendar-fix`
+- `post-rag-threshold-tuning`
+
+**What triggers a run:** Any change to a node's core logic, prompt, or data source. Do not close a Phase 5 story without a completed run.
+
+**How to interpret results:** Use `mcp__langsmith` to fetch the experiment and compare against the prior run. Key metrics: hallucination score, answer relevance, source grounding. If a metric regresses, do not merge — diagnose the cause first.
+
+**Stale name rule:** A name identical to the previous run makes the experiment list unreadable. Always change it before running.
+
+## Cost Optimization (Claude Code Pro)
+
+- Use lighter model variants for exploratory questions ("where is X defined?", "what does this function do?")
+- Reserve full capability for implementation, refactoring, and eval analysis
+- Use `/compact` when context grows large mid-session — resets the window without losing history
+- Press `#` mid-session to capture non-obvious learnings into CLAUDE.md before context is lost
+- Run `/remember` at session end to persist key decisions to memory for future sessions
+- `MEMORY.md` is auto-loaded at session start — prior decisions are already available, no need to re-derive context
+
+## Collaboration Style
+
+- User is learning Claude Code best practices. When a more optimal tool, workflow, or approach is available, suggest it proactively with a brief explanation of why.
+- After any meaningful implementation, prompt to update the relevant repo docs and Notion pages. "Meaningful" = new node, changed routing logic, new state fields, new external dependency, architectural trade-off, or scope change. Skip for minor bug fixes and styling.
+
 ## Tech Stack
-Python 3.11+, LangGraph, Chainlit, Groq (llama-3.1-8b-instant classifier),
-Google Gemini 2.5 Flash (synthesizer + embeddings), yfinance, Alpha Vantage (fallback),
-ChromaDB (Phase 3 RAG), LangSmith, pytest
+
+Python 3.11+, LangGraph, Chainlit, Groq llama-3.1-8b-instant (classifiers + sentiment batches),
+Google Gemini 2.5 Flash (synthesizer + embeddings), yfinance, Alpha Vantage (price fallback),
+Finnhub + You.com + Google RSS (news), Reddit public JSON + Stocktwits (sentiment),
+Firecrawl (news enrichment), ChromaDB (RAG), LangSmith, pytest

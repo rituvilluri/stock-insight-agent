@@ -20,6 +20,7 @@ from agent.graph.nodes.date_parser import (
     parse_dates,
     _parse_simple_range,
     _extract_earnings_quarter_year,
+    _get_earnings_date,
     _has_current_snapshot_request,
 )
 
@@ -350,6 +351,75 @@ def test_layer1_does_not_reach_llm(message):
         result = parse_dates(state)
     assert result.get("date_missing") is False, f"Layer 1 missed: {message!r}"
     assert result.get("date_error") is None
+
+
+# ---------------------------------------------------------------------------
+# Layer 2: fiscal calendar handling in _get_earnings_date
+# ---------------------------------------------------------------------------
+
+@patch("agent.graph.nodes.date_parser.yf.Ticker")
+def test_get_earnings_date_fiscal_calendar_q4(mock_ticker_class):
+    """
+    Q4 fiscal calendar: NVIDIA reports Q4 earnings in February of the
+    following year. The old calendar-month filter (Oct-Dec) missed this.
+    The extended window (Oct 2024 – Apr 2025) must find it.
+    """
+    earnings_date = pd.Timestamp("2025-02-26", tz="America/New_York")
+    mock_df = pd.DataFrame({"EPS Estimate": [0.89]}, index=[earnings_date])
+
+    mock_instance = MagicMock()
+    mock_instance.earnings_dates = mock_df
+    mock_ticker_class.return_value = mock_instance
+
+    result = _get_earnings_date("NVDA", quarter=4, year=2024)
+
+    assert result is not None
+    assert result.year == 2025
+    assert result.month == 2
+    assert result.day == 26
+
+
+@patch("agent.graph.nodes.date_parser.yf.Ticker")
+def test_get_earnings_date_calendar_year_company_unaffected(mock_ticker_class):
+    """
+    Calendar-year companies (report within the same quarter) must still
+    resolve correctly after the window widening.
+    """
+    earnings_date = pd.Timestamp("2024-05-22", tz="America/New_York")
+    mock_df = pd.DataFrame({"EPS Estimate": [5.59]}, index=[earnings_date])
+
+    mock_instance = MagicMock()
+    mock_instance.earnings_dates = mock_df
+    mock_ticker_class.return_value = mock_instance
+
+    result = _get_earnings_date("NVDA", quarter=2, year=2024)
+
+    assert result is not None
+    assert result.year == 2024
+    assert result.month == 5
+    assert result.day == 22
+
+
+@patch("agent.graph.nodes.date_parser.yf.Ticker")
+def test_node_earnings_fiscal_calendar_nvidia_style(mock_ticker_class):
+    """
+    Full node test: 'around Q4 '24 earnings' for a fiscal-calendar company
+    whose report date is Feb 2025. Must resolve to the ±window around Feb 26.
+    """
+    earnings_date = pd.Timestamp("2025-02-26", tz="America/New_York")
+    mock_df = pd.DataFrame({"EPS Estimate": [0.89]}, index=[earnings_date])
+
+    mock_instance = MagicMock()
+    mock_instance.earnings_dates = mock_df
+    mock_ticker_class.return_value = mock_instance
+
+    result = parse_dates(_make_state("What happened around Q4 '24 earnings?", ticker="NVDA"))
+
+    assert result["date_missing"] is False
+    assert result["start_date"] == "2025-02-12"   # 14 days before Feb 26
+    assert result["end_date"] == "2025-03-05"      # 7 days after Feb 26
+    assert "Q4" in result["date_context"]
+    assert result["date_error"] is None
 
 
 # ---------------------------------------------------------------------------

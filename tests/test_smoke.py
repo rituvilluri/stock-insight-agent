@@ -61,17 +61,29 @@ async def test_smoke_q4_2025_date_accuracy():
 
 @pytest.mark.asyncio
 async def test_smoke_analyst_brief_has_all_sections():
-    """Analyst brief response must contain all required markdown sections."""
+    """
+    Analyst brief response must be substantive continuous prose with inline
+    citations. The redesigned synthesizer (Phase 5) uses no ## section headers —
+    it produces a narrative paragraph structure with [N] inline citations.
+    """
     state = {"user_message": "How did NVDA do last month?", "user_config": {}}
     final = await graph.ainvoke(state)
 
     response = final.get("response_text") or ""
-    required_sections = [
-        "## Price Action",
-        "## News & Catalysts",
-    ]
-    for section in required_sections:
-        assert section in response, f"Analyst brief missing section: {section!r}"
+
+    # Minimum length — a real analyst note is at least 300 chars
+    assert len(response) >= 300, f"Response too short: {len(response)} chars"
+
+    # Must mention the ticker or company name
+    assert "NVDA" in response or "NVIDIA" in response, "Response must reference the company"
+
+    # Must contain at least one inline citation if news was retrieved
+    news_articles = final.get("news_articles") or []
+    if news_articles:
+        assert "[1]" in response, "Response must contain inline citations when news is available"
+
+    # Must NOT use old ## section header format (prose redesign, Phase 5)
+    assert "## Price Action" not in response, "Old section-header format must not appear"
 
     print(f"\n[SMOKE] analyst brief response length={len(response)} chars")
 

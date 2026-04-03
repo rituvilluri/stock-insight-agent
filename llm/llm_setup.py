@@ -35,3 +35,13 @@ llm_synthesizer = ChatGoogleGenerativeAI(
     streaming=True,
 )
 
+# Used by the Retrieval Planner node (Phase 5).
+# Same model as llm_classifier but with more tokens — the planner prompt
+# is longer (it receives query context) and the JSON output is 3 fields.
+# temperature=0 → deterministic routing decisions.
+llm_planner = ChatGroq(
+    model="llama-3.1-8b-instant",
+    temperature=0,
+    max_tokens=512,
+    groq_api_key=_groq_key,
+)
