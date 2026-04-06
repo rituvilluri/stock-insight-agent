@@ -181,7 +181,7 @@ def test_create_workflow_compiles_without_error():
 @patch("agent.graph.nodes.date_parser.llm_classifier")
 @patch("agent.graph.nodes.ticker_resolver.llm_classifier")
 @patch("agent.graph.nodes.intent_classifier.llm_classifier")
-async def test_e2e_stock_analysis_no_chart(
+async def test_routing_e2e_stock_analysis_no_chart(
     mock_intent_llm,
     mock_ticker_llm,
     mock_date_llm,
@@ -190,9 +190,9 @@ async def test_e2e_stock_analysis_no_chart(
     mock_plotly_go,
 ):
     """
-    Happy path: stock_analysis intent, no chart requested.
-    Verifies response_text is written and chart_data is absent.
-    All LLM and external API calls are mocked.
+    Routing integration: verifies full graph wiring with mocked LLMs.
+    Confirms state flows through all nodes correctly, but does NOT validate
+    LLM output quality — LLMs are mocked, so this is a routing test only.
     """
     # Intent classifier uses with_structured_output().invoke() — must mock at that level
     intent_result = MagicMock()

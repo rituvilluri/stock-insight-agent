@@ -423,6 +423,79 @@ def test_node_earnings_fiscal_calendar_nvidia_style(mock_ticker_class):
 
 
 # ---------------------------------------------------------------------------
+# Layer 1: "around Q{N} YYYY earnings" must NOT be caught by Layer 1
+# ---------------------------------------------------------------------------
+
+def test_around_earnings_4digit_year_skips_layer1():
+    """
+    'around Q2 2024 earnings' must return None from Layer 1 so that
+    Layer 2 can anchor the window to the actual earnings date.
+    Before the fix, the first Q{N} YYYY pattern (no earnings guard) would
+    intercept this and return the full quarter range.
+    """
+    result = _parse_simple_range("What happened with Apple around Q2 2024 earnings?")
+    assert result is None
+
+
+def test_earnings_results_without_around_still_uses_layer1():
+    """
+    'Q4 2024 earnings results' (no 'around') must still resolve via Layer 1.
+    The guard only applies when both 'around' and 'earnings' are present.
+    """
+    result = _parse_simple_range("NVDA Q4 2024 earnings results")
+    assert result is not None
+    start, end, ctx = result
+    assert start == "2024-10-01"
+    assert end == "2024-12-31"
+
+
+@patch("agent.graph.nodes.date_parser.yf.Ticker")
+def test_node_around_earnings_4digit_year_aapl(mock_ticker_class):
+    """
+    Regression: 'around Q2 2024 earnings' (4-digit year, AAPL) was returning
+    the full Q2 quarter instead of the ±window around the May 2 earnings date.
+    """
+    earnings_date = pd.Timestamp("2024-05-02", tz="America/New_York")
+    mock_df = pd.DataFrame({"EPS Estimate": [1.53]}, index=[earnings_date])
+    mock_instance = MagicMock()
+    mock_instance.earnings_dates = mock_df
+    mock_ticker_class.return_value = mock_instance
+
+    result = parse_dates(
+        _make_state("What happened with Apple around Q2 2024 earnings?", ticker="AAPL")
+    )
+
+    assert result["date_missing"] is False
+    assert result["start_date"] == "2024-04-18"   # 14 days before May 2
+    assert result["end_date"] == "2024-05-09"      # 7 days after May 2
+    assert "Q2" in result["date_context"]
+    assert result["date_error"] is None
+
+
+@patch("agent.graph.nodes.date_parser.yf.Ticker")
+def test_node_around_earnings_4digit_year_nvda(mock_ticker_class):
+    """
+    Regression: 'around Q2 2024 earnings' (4-digit year, NVDA) was returning
+    the full Q2 quarter instead of the ±window around the May 22 earnings date.
+    """
+    earnings_date = pd.Timestamp("2024-05-22", tz="America/New_York")
+    mock_df = pd.DataFrame({"EPS Estimate": [5.59]}, index=[earnings_date])
+    mock_instance = MagicMock()
+    mock_instance.earnings_dates = mock_df
+    mock_ticker_class.return_value = mock_instance
+
+    result = parse_dates(
+        _make_state("What happened with NVIDIA around Q2 2024 earnings?", ticker="NVDA")
+    )
+
+    assert result["date_missing"] is False
+    assert result["start_date"] == "2024-05-08"   # 14 days before May 22
+    assert result["end_date"] == "2024-05-29"      # 7 days after May 22
+    assert "Q2" in result["date_context"]
+    assert result["date_error"] is None
+
+
+# ---------------------------------------------------------------------------
 # Task 1: Q{N} [of] YYYY Layer 1 regex — exact boundary assertions
 # ---------------------------------------------------------------------------
 
@@ -445,3 +518,53 @@ def test_quarter_year_regex(message, expected_start, expected_end, description):
     assert result["end_date"] == expected_end, f"FAILED ({description}): end {result['end_date']} != {expected_end}"
     assert result["date_missing"] is False
     assert result["date_error"] is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Session-context date preservation (Layer 3 short-circuit)
+# ---------------------------------------------------------------------------
+
+def test_seeded_dates_preserved_when_message_has_no_date():
+    """
+    Follow-up messages with no date expression (e.g. 'What about the chart?')
+    must keep the seeded start/end from the previous turn rather than letting
+    Layer 3 confabulate a date.
+    """
+    state = _make_state(
+        message="What about the chart?",
+        ticker="NVDA",
+        start_date="2025-02-19",
+        end_date="2025-03-19",
+        date_context="last month",
+    )
+    with patch("agent.graph.nodes.date_parser.llm_classifier") as mock_llm:
+        mock_llm.invoke.side_effect = AssertionError(
+            "Layer 3 LLM must not be called when seeded dates are present"
+        )
+        result = parse_dates(state)
+
+    assert result["start_date"] == "2025-02-19", (
+        f"start_date overwritten — got {result['start_date']!r}"
+    )
+    assert result["end_date"] == "2025-03-19", (
+        f"end_date overwritten — got {result['end_date']!r}"
+    )
+    assert result["date_missing"] is False
+    assert result["date_error"] is None
+
+
+def test_layer3_still_fires_when_no_seeded_dates():
+    """
+    When there are no seeded dates and Layers 1+2 find nothing, Layer 3
+    (LLM) must still be invoked.
+    """
+    state = _make_state(message="What about the second half of last fiscal year?")
+    with patch("agent.graph.nodes.date_parser.llm_classifier") as mock_llm:
+        mock_llm.invoke.return_value = _mock_llm_response(
+            '{"start_date": "2024-07-01", "end_date": "2024-12-31", "date_context": "H2 FY2024"}'
+        )
+        result = parse_dates(state)
+
+    mock_llm.invoke.assert_called_once()
+    assert result["start_date"] == "2024-07-01"
+    assert result["end_date"] == "2024-12-31"

@@ -30,7 +30,7 @@ logging.basicConfig(level=logging.WARNING)
 logger = logging.getLogger(__name__)
 
 DATASET_NAME = "stock-insight-agent-baseline"
-EXPERIMENT_NAME = "post-phase5-planner-rag-date-fixes"
+EXPERIMENT_NAME = "post-date-parser-earliest-earnings-in-window"
 
 
 def run_graph(inputs: dict) -> dict:

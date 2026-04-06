@@ -199,3 +199,43 @@ def test_router_returns_send_objects():
     result = route_after_plan_retrieval(state)
     for item in result:
         assert isinstance(item, Send)
+
+
+# ---------------------------------------------------------------------------
+# Prompt content and intent forwarding
+# ---------------------------------------------------------------------------
+
+def test_planner_prompt_contains_general_lookup_rag_rule():
+    """
+    The system prompt must contain the decision rule that disables fetch_rag
+    for general_lookup intent. If this rule is removed, the planner will fetch
+    RAG on every general_lookup query, wasting ChromaDB API budget.
+    """
+    from agent.graph.nodes.retrieval_planner import _PLANNER_SYSTEM_PROMPT
+
+    assert "general_lookup" in _PLANNER_SYSTEM_PROMPT, (
+        "System prompt must reference general_lookup in the fetch_rag decision rule"
+    )
+    assert "fetch_rag" in _PLANNER_SYSTEM_PROMPT, (
+        "System prompt must contain fetch_rag decision rule"
+    )
+
+
+@patch("agent.graph.nodes.retrieval_planner.llm_planner")
+def test_planner_forwards_intent_to_llm(mock_llm):
+    """
+    The human message sent to the LLM must include the intent field so the
+    LLM can apply the correct fetch_rag decision for general_lookup queries.
+    If intent is not forwarded, the LLM cannot distinguish query types.
+    """
+    mock_llm.invoke.return_value = _mock_llm_response(
+        '{"fetch_news": true, "fetch_sentiment": false, "fetch_rag": false}'
+    )
+    state = _make_state(intent="general_lookup")
+    plan_retrieval(state)
+
+    call_args = mock_llm.invoke.call_args[0][0]
+    human_message_content = call_args[1].content
+    assert "general_lookup" in human_message_content, (
+        f"LLM human message must include 'general_lookup'. Got: {human_message_content!r}"
+    )

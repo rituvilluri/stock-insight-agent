@@ -355,3 +355,23 @@ def test_node_writes_error_on_unexpected_exception(mock_reddit):
     assert result["sentiment_summary"] is None
     assert result["sentiment_posts"] is None
     assert "unexpected crash" in result["sentiment_error"]
+
+
+def test_returns_only_owned_fields():
+    """
+    analyze_reddit_sentiment must return ONLY its three owned fields.
+    Returning {**state} in a parallel Send() branch causes LangGraph to
+    throw InvalidUpdateError when merging results from concurrent nodes.
+    """
+    state = _base_state(extra_sentinel="should_not_leak")
+
+    with patch("agent.graph.nodes.reddit_sentiment._fetch_reddit_posts", return_value=[]):
+        with patch("agent.graph.nodes.reddit_sentiment._fetch_stocktwits_messages", return_value=[]):
+            result = analyze_reddit_sentiment(state)
+
+    assert set(result.keys()) == {"sentiment_summary", "sentiment_posts", "sentiment_error"}, (
+        f"analyze_reddit_sentiment returned unexpected keys: {set(result.keys())}"
+    )
+    assert "extra_sentinel" not in result
+    assert "user_message" not in result
+    assert "ticker" not in result

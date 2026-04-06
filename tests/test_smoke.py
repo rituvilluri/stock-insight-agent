@@ -3,11 +3,12 @@ Smoke tests — real API calls, no mocks.
 
 These tests verify the full pipeline against live data.
 They are slow and require all API keys to be set.
-DO NOT run in CI. Run manually with:
+DO NOT run in CI. Run manually before any deployment:
 
-    PYTHONPATH=. pytest tests/test_smoke.py -v -s --no-header
+    pytest tests/test_smoke.py -m smoke -v -s
 
-Each test asserts only on final state fields, not on response prose.
+To run: ensure GROQ_API_KEY, GEMINI_API_KEY, FINNHUB_API_KEY are set in
+your .env file. Tests are excluded from the standard suite (no CI credentials).
 """
 
 import os
@@ -16,11 +17,15 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
-# Skip all smoke tests if GROQ_API_KEY is not set (required for LLM calls)
-pytestmark = pytest.mark.skipif(
-    not os.getenv("GROQ_API_KEY"),
-    reason="GROQ_API_KEY not set — smoke tests require live API keys"
-)
+# Mark as 'smoke' so they can be targeted with: pytest -m smoke
+# Skip when credentials are absent (standard CI environment)
+pytestmark = [
+    pytest.mark.smoke,
+    pytest.mark.skipif(
+        not os.getenv("GROQ_API_KEY"),
+        reason="GROQ_API_KEY not set — run manually with .env configured",
+    ),
+]
 
 from agent.graph.workflow import app as graph
 

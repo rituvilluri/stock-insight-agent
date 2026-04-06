@@ -131,9 +131,14 @@ def _parse_simple_range(message: str) -> tuple[str, str, str] | None:
     patterns = [
         # "Q4 2025", "Q1 2024", "Q3 of 2022" — calendar quarter boundaries
         # Must come FIRST to intercept before Layer 3 LLM.
+        # Exception: "around Q2 2024 earnings" defers to Layer 2 so the
+        # actual earnings date (not the full quarter) anchors the window.
         (
             re.compile(r"\bQ([1-4])\s+(?:of\s+)?(20\d{2})\b", re.IGNORECASE),
-            lambda m: _quarter_boundaries(int(m.group(1)), int(m.group(2))) + (
+            lambda m: None if (
+                re.search(r"\baround\b", message, re.IGNORECASE)
+                and re.search(r"earnings?", message, re.IGNORECASE)
+            ) else _quarter_boundaries(int(m.group(1)), int(m.group(2))) + (
                 f"Q{m.group(1)} {m.group(2)}",
             ),
         ),
@@ -356,6 +361,11 @@ def _get_earnings_date(ticker: str, quarter: int, year: int) -> datetime | None:
         quarter_end = datetime(year, end_month, quarter_end_day)
         window_end = quarter_end + timedelta(days=75)
 
+        # Collect all earnings dates within the window, then return the earliest.
+        # yfinance returns dates newest-first, so taking the first match would
+        # pick a later quarter's report when two fall within the 75-day window
+        # (e.g. AAPL Q2 2024: both May 2 and Aug 1 land in Apr 1–Sep 13).
+        matches: list[datetime] = []
         for ts in df.index:
             # earnings_dates index is timezone-aware; strip tz for arithmetic
             dt = ts.to_pydatetime()
@@ -363,9 +373,9 @@ def _get_earnings_date(ticker: str, quarter: int, year: int) -> datetime | None:
                 dt = dt.replace(tzinfo=None)
 
             if window_start <= dt <= window_end:
-                return dt
+                matches.append(dt)
 
-        return None
+        return min(matches) if matches else None
 
     except Exception as e:
         logger.warning("yfinance earnings lookup failed for %s Q%d %d: %s", ticker, quarter, year, e)
@@ -518,6 +528,23 @@ def parse_dates(state: AgentState) -> AgentState:
                 "date_error": None,
             }
 
+        # Before Layer 3: if session context provides dates and the message has no
+        # recognisable date expression, preserve the prior turn's range instead of
+        # asking the LLM to confabulate one (e.g. "What about the chart?").
+        seeded_start = state.get("start_date", "")
+        seeded_end = state.get("end_date", "")
+        if seeded_start and seeded_end:
+            logger.info(
+                "parse_dates: no date in message; preserving session context %s to %s",
+                seeded_start, seeded_end,
+            )
+            return {
+                **state,
+                "date_missing": False,
+                "include_current_snapshot": include_current,
+                "date_error": None,
+            }
+
         # Layer 3 — LLM fallback for complex/ambiguous expressions
         logger.info("parse_dates: no simple/earnings match, falling back to LLM")
         result = _parse_with_llm(user_message)
@@ -529,21 +556,6 @@ def parse_dates(state: AgentState) -> AgentState:
                 "start_date": start,
                 "end_date": end,
                 "date_context": ctx,
-                "date_missing": False,
-                "include_current_snapshot": include_current,
-                "date_error": None,
-            }
-
-        # All layers failed — check if dates were seeded from session context
-        seeded_start = state.get("start_date", "")
-        seeded_end = state.get("end_date", "")
-        if seeded_start and seeded_end:
-            logger.info(
-                "parse_dates: no date in message; preserving session context %s to %s",
-                seeded_start, seeded_end,
-            )
-            return {
-                **state,
                 "date_missing": False,
                 "include_current_snapshot": include_current,
                 "date_error": None,

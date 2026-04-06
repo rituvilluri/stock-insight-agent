@@ -169,15 +169,16 @@ async def test_date_missing_skips_data_nodes():
 
 
 @pytest.mark.asyncio
-async def test_session_context_preserved_across_turns():
+async def test_session_context_ticker_survives_follow_up():
     """
-    Session context: a follow-up 'What about the chart?' must reuse ticker
-    and date from the previous turn's state fields.
+    When ticker and dates are seeded from a previous turn, the graph must
+    preserve the ticker through to the final state. 'What about the chart?'
+    has no ticker mention — the seeded 'NVDA' must survive to the output.
     """
     state = {
         "user_message": "What about the chart?",
         "user_config": {},
-                # Seeded from previous turn (as app.py does via last_context)
+        # Seeded from previous turn (as app.py does via last_context)
         "ticker": "NVDA",
         "company_name": "NVIDIA",
         "start_date": "2025-02-19",
@@ -190,11 +191,12 @@ async def test_session_context_preserved_across_turns():
         with _rag_mocks():
             final = await graph.ainvoke(state)
 
-    assert final.get("ticker") == "NVDA", f"Ticker lost in session context: {final.get('ticker')}"
-    # start_date is either preserved from session context or re-resolved by the LLM —
-    # either outcome is valid. The important thing is it's non-empty.
-    assert final.get("start_date"), f"start_date must be non-empty, got: {final.get('start_date')}"
-    # chart_request produces chart_data; stock_analysis produces response_text.
-    # Either is a valid outcome for "What about the chart?" as a follow-up.
-    assert final.get("chart_data") or final.get("response_text"), \
-        "Must produce chart_data or response_text for follow-up"
+    assert final.get("ticker") == "NVDA", (
+        f"Session context ticker lost — got: {final.get('ticker')!r}"
+    )
+    assert final.get("start_date") == "2025-02-19", (
+        f"start_date was overwritten — got: {final.get('start_date')!r}"
+    )
+    assert final.get("end_date") == "2025-03-19", (
+        f"end_date was overwritten — got: {final.get('end_date')!r}"
+    )

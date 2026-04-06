@@ -75,23 +75,14 @@ def test_no_end_date_returns_empty():
     assert result["filing_chunks"] == []
 
 
-@patch.dict(os.environ, {}, clear=True)
 def test_missing_gemini_key_uses_fallback():
-    """When GEMINI_API_KEY is absent, the node falls back to sentence-transformers
-    rather than returning an error, so filing_error should remain None."""
+    """When GEMINI_API_KEY is absent, the node returns early with a descriptive
+    filing_error rather than attempting to embed or query ChromaDB."""
     env_without_key = {k: v for k, v in os.environ.items() if k != "GEMINI_API_KEY"}
     with patch.dict(os.environ, env_without_key, clear=True):
-        # Patch _get_collection and _embed_query to avoid real I/O
-        with patch("agent.graph.nodes.rag_retriever._get_collection") as mock_col,              patch("agent.graph.nodes.rag_retriever._embed_query", return_value=[0.1] * 384):
-            mock_collection = MagicMock()
-            mock_collection.count.return_value = 0
-            mock_collection.query.return_value = {"documents": [[]], "metadatas": [[]], "distances": [[]]}
-            mock_col.return_value = mock_collection
-            # Also patch _get_cik to avoid real network call
-            with patch("agent.graph.nodes.rag_retriever._get_cik", return_value=None):
-                result = retrieve_rag_context(BASE_STATE)
+        result = retrieve_rag_context(BASE_STATE)
     assert result["filing_chunks"] == []
-    assert result["filing_error"] is None
+    assert result["filing_error"] == "GEMINI_API_KEY not configured"
 
 
 # ---------------------------------------------------------------------------

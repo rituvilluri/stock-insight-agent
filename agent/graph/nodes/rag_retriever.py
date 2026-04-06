@@ -66,15 +66,32 @@ _MAX_FILINGS_TO_INGEST = 3   # cap ingestion per query to stay within rate limit
 # HTML cleaning
 # ---------------------------------------------------------------------------
 
+_SUPPRESS_TAGS = {"style", "script"}
+
+
 class _TagStripper(HTMLParser):
-    """Minimal HTML → plain text converter (no third-party deps)."""
+    """Minimal HTML → plain text converter (no third-party deps).
+
+    Text inside <style> and <script> blocks is suppressed so that CSS rules
+    and JS code don't bleed into the chunk text seen by the synthesizer.
+    """
 
     def __init__(self):
         super().__init__()
         self._parts: list[str] = []
+        self._suppress_depth: int = 0
+
+    def handle_starttag(self, tag: str, attrs) -> None:
+        if tag.lower() in _SUPPRESS_TAGS:
+            self._suppress_depth += 1
+
+    def handle_endtag(self, tag: str) -> None:
+        if tag.lower() in _SUPPRESS_TAGS and self._suppress_depth > 0:
+            self._suppress_depth -= 1
 
     def handle_data(self, data: str) -> None:
-        self._parts.append(data)
+        if self._suppress_depth == 0:
+            self._parts.append(data)
 
     def get_text(self) -> str:
         return " ".join(self._parts)
