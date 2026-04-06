@@ -518,3 +518,53 @@ def test_quarter_year_regex(message, expected_start, expected_end, description):
     assert result["end_date"] == expected_end, f"FAILED ({description}): end {result['end_date']} != {expected_end}"
     assert result["date_missing"] is False
     assert result["date_error"] is None
+
+
+# ---------------------------------------------------------------------------
+# Task 2: Session-context date preservation (Layer 3 short-circuit)
+# ---------------------------------------------------------------------------
+
+def test_seeded_dates_preserved_when_message_has_no_date():
+    """
+    Follow-up messages with no date expression (e.g. 'What about the chart?')
+    must keep the seeded start/end from the previous turn rather than letting
+    Layer 3 confabulate a date.
+    """
+    state = _make_state(
+        message="What about the chart?",
+        ticker="NVDA",
+        start_date="2025-02-19",
+        end_date="2025-03-19",
+        date_context="last month",
+    )
+    with patch("agent.graph.nodes.date_parser.llm_classifier") as mock_llm:
+        mock_llm.invoke.side_effect = AssertionError(
+            "Layer 3 LLM must not be called when seeded dates are present"
+        )
+        result = parse_dates(state)
+
+    assert result["start_date"] == "2025-02-19", (
+        f"start_date overwritten — got {result['start_date']!r}"
+    )
+    assert result["end_date"] == "2025-03-19", (
+        f"end_date overwritten — got {result['end_date']!r}"
+    )
+    assert result["date_missing"] is False
+    assert result["date_error"] is None
+
+
+def test_layer3_still_fires_when_no_seeded_dates():
+    """
+    When there are no seeded dates and Layers 1+2 find nothing, Layer 3
+    (LLM) must still be invoked.
+    """
+    state = _make_state(message="What about the second half of last fiscal year?")
+    with patch("agent.graph.nodes.date_parser.llm_classifier") as mock_llm:
+        mock_llm.invoke.return_value = _mock_llm_response(
+            '{"start_date": "2024-07-01", "end_date": "2024-12-31", "date_context": "H2 FY2024"}'
+        )
+        result = parse_dates(state)
+
+    mock_llm.invoke.assert_called_once()
+    assert result["start_date"] == "2024-07-01"
+    assert result["end_date"] == "2024-12-31"
