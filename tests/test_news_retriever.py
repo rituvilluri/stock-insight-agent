@@ -445,3 +445,23 @@ def test_retrieve_news_unexpected_exception_writes_error(mock_fh_key):
     assert result["news_articles"] is None
     assert result["news_error"] is not None
     assert "unexpected" in result["news_error"]
+
+
+def test_returns_only_owned_fields():
+    """
+    retrieve_news must return ONLY its three owned fields.
+    Returning {**state} in a parallel Send() branch causes LangGraph to
+    throw InvalidUpdateError when merging results from concurrent nodes.
+    """
+    state = _base_state(extra_sentinel="should_not_leak")
+
+    with patch("agent.graph.nodes.news_retriever._fetch_articles", return_value=([], "none")):
+        with patch("agent.graph.nodes.news_retriever._enrich_articles", return_value=[]):
+            result = retrieve_news(state)
+
+    assert set(result.keys()) == {"news_articles", "news_source_used", "news_error"}, (
+        f"retrieve_news returned unexpected keys: {set(result.keys())}"
+    )
+    assert "extra_sentinel" not in result
+    assert "user_message" not in result
+    assert "ticker" not in result
