@@ -131,9 +131,14 @@ def _parse_simple_range(message: str) -> tuple[str, str, str] | None:
     patterns = [
         # "Q4 2025", "Q1 2024", "Q3 of 2022" — calendar quarter boundaries
         # Must come FIRST to intercept before Layer 3 LLM.
+        # Exception: "around Q2 2024 earnings" defers to Layer 2 so the
+        # actual earnings date (not the full quarter) anchors the window.
         (
             re.compile(r"\bQ([1-4])\s+(?:of\s+)?(20\d{2})\b", re.IGNORECASE),
-            lambda m: _quarter_boundaries(int(m.group(1)), int(m.group(2))) + (
+            lambda m: None if (
+                re.search(r"\baround\b", message, re.IGNORECASE)
+                and re.search(r"earnings?", message, re.IGNORECASE)
+            ) else _quarter_boundaries(int(m.group(1)), int(m.group(2))) + (
                 f"Q{m.group(1)} {m.group(2)}",
             ),
         ),
