@@ -5,9 +5,11 @@ All external calls (Finnhub, You.com, Google RSS, Firecrawl) are mocked.
 No network access or API keys required.
 """
 
+import re as _re
 from unittest.mock import MagicMock, call, patch
 
 import pytest
+import responses as responses_lib
 
 from agent.graph.nodes.news_retriever import (
     _build_query,
@@ -373,6 +375,34 @@ def test_enrich_articles_calls_enricher_for_each_article(mock_enrich):
     assert mock_enrich.call_count == 3
 
 
+@patch("agent.graph.nodes.news_retriever.requests.post")
+def test_enrich_articles_returns_original_snippets_on_firecrawl_500(mock_post):
+    """
+    If Firecrawl returns HTTP 500 for every article, _enrich_articles must
+    return the original articles unchanged — not an empty list, not None.
+
+    Without this test, a Firecrawl outage would silently wipe all snippets
+    before synthesis, degrading response quality with no visible error.
+    """
+    mock_response = MagicMock()
+    mock_response.status_code = 500
+    mock_post.return_value = mock_response
+
+    articles = [
+        _article(title="Article 1", url="https://reuters.com/a1", snippet="Original snippet 1."),
+        _article(title="Article 2", url="https://reuters.com/a2", snippet="Original snippet 2."),
+    ]
+    result = _enrich_articles(articles, api_key="fake_key")
+
+    assert len(result) == 2, "Must return all articles even when Firecrawl returns 500"
+    assert result[0]["snippet"] == "Original snippet 1.", (
+        "Article snippet must be unchanged when Firecrawl returns 500"
+    )
+    assert result[1]["snippet"] == "Original snippet 2.", (
+        "Article snippet must be unchanged when Firecrawl returns 500"
+    )
+
+
 # ---------------------------------------------------------------------------
 # retrieve_news — node integration
 # ---------------------------------------------------------------------------
@@ -465,3 +495,54 @@ def test_returns_only_owned_fields():
     assert "extra_sentinel" not in result
     assert "user_message" not in result
     assert "ticker" not in result
+
+
+# ---------------------------------------------------------------------------
+# HTTP-layer field-mapping contract test
+# ---------------------------------------------------------------------------
+
+@responses_lib.activate
+def test_fetch_finnhub_parses_real_response_field_names():
+    """
+    HTTP-layer contract test: _fetch_finnhub must correctly map Finnhub's
+    field names (headline, summary, datetime, source) to the internal
+    article format (title, snippet, published_date, source_name).
+
+    Unlike function-level mocks, this intercepts at the HTTP layer so the
+    actual field-mapping code runs. If Finnhub renames a field in their API,
+    this test fails immediately, pointing directly at the broken mapping.
+    """
+    responses_lib.add(
+        responses_lib.GET,
+        _re.compile(r"https://finnhub\.io/api/v1/company-news.*"),
+        json=[
+            {
+                "headline": "NVDA hits record high",
+                "source": "Reuters",
+                "datetime": 1718452800,
+                "url": "https://reuters.com/nvda-record",
+                "summary": "NVIDIA stock reached a new all-time high on strong AI demand.",
+            }
+        ],
+        status=200,
+    )
+
+    result = _fetch_finnhub("NVDA", "2024-06-01", "2024-06-30", api_key="fake_key")
+
+    assert result is not None and len(result) == 1, (
+        f"Expected 1 article from Finnhub response, got: {result}"
+    )
+    article = result[0]
+    assert article["title"] == "NVDA hits record high", (
+        f"'headline' must map to 'title'. Got: {article.get('title')!r}"
+    )
+    assert article["snippet"] == "NVIDIA stock reached a new all-time high on strong AI demand.", (
+        f"'summary' must map to 'snippet'. Got: {article.get('snippet')!r}"
+    )
+    assert article["source_name"] == "Reuters", (
+        f"'source' must map to 'source_name'. Got: {article.get('source_name')!r}"
+    )
+    assert article["published_date"] == "2024-06-15", (
+        f"'datetime' (unix) must map to ISO 'published_date'. Got: {article.get('published_date')!r}"
+    )
+    assert article["url"] == "https://reuters.com/nvda-record"

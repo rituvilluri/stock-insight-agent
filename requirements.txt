@@ -33,3 +33,4 @@ lxml
 tqdm
 pytest
 pytest-asyncio
+responses>=0.25.0

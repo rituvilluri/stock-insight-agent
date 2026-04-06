@@ -149,6 +149,45 @@ def test_volume_anomaly_baseline_failure_returns_safe_default(mock_ticker_class)
     assert result["anomaly_ratio"] is None
 
 
+@patch("agent.graph.nodes.data_fetcher.yf.Ticker")
+def test_volume_anomaly_exactly_at_threshold_is_not_anomalous(mock_ticker_class):
+    """
+    Ratio == VOLUME_ANOMALY_THRESHOLD (1.5) must NOT flag is_anomalous.
+    The comparison is strictly greater-than, so the boundary itself is safe.
+    This guards against a regression to >= that would produce false positives.
+    """
+    baseline_df = _make_hist_df(n_days=60, volume=1_000_000)
+    mock_instance = MagicMock()
+    mock_instance.history.return_value = baseline_df
+    mock_ticker_class.return_value = mock_instance
+
+    # Exactly 1.5x the baseline
+    period_df = _make_hist_df(n_days=5, volume=1_500_000)
+    result = _compute_volume_anomaly("NVDA", period_df, "2024-05-01")
+
+    assert result["is_anomalous"] is False
+    assert result["anomaly_ratio"] == pytest.approx(1.5, rel=0.01)
+
+
+@patch("agent.graph.nodes.data_fetcher.yf.Ticker")
+def test_volume_anomaly_just_above_threshold_is_anomalous(mock_ticker_class):
+    """
+    Ratio just above VOLUME_ANOMALY_THRESHOLD (1.5) must set is_anomalous=True.
+    Confirms the strict-greater-than boundary fires at the first value above 1.5.
+    """
+    baseline_df = _make_hist_df(n_days=60, volume=1_000_000)
+    mock_instance = MagicMock()
+    mock_instance.history.return_value = baseline_df
+    mock_ticker_class.return_value = mock_instance
+
+    # 1,510,000 / 1,000,000 = 1.51 — just above threshold, rounds cleanly
+    period_df = _make_hist_df(n_days=1, volume=1_510_000)
+    result = _compute_volume_anomaly("NVDA", period_df, "2024-05-01")
+
+    assert result["is_anomalous"] is True
+    assert result["anomaly_ratio"] == pytest.approx(1.51, rel=0.01)
+
+
 # ---------------------------------------------------------------------------
 # Full node tests
 # ---------------------------------------------------------------------------
