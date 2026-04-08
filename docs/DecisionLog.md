@@ -428,3 +428,24 @@ An intermediate step used Groq llama-3.3-70b-versatile as the synthesizer upgrad
 **Choice and Rationale:** LLM-driven planner. The planner adds one cheap, fast LLM call before the fan-out and can eliminate several seconds of parallel I/O when retrieval is unnecessary. The fallback guarantee (all nodes activate on failure) means the planner cannot make the system worse — worst case is pre-planner behaviour. Rule-based routing was rejected because intent classification alone is too coarse: both "how did NVDA do last week?" and "what did NVDA management say about margins in Q2 earnings?" classify as `stock_analysis`, but only the second warrants RAG retrieval.
 
 **Tradeoffs Accepted:** One additional LLM call per `stock_analysis` query (~100 ms on Groq free tier). New state fields: `retrieval_plan` (dict) and `planner_error` (str or None). Workflow topology change: `route_after_fetch_price` now routes to `plan_retrieval` instead of directly to the fan-out for all non-chart intents. The planner's decision is logged at INFO level for LangSmith trace inspection.
+
+---
+
+## Decision 21: Migrate Gemini to Vertex AI; Upgrade Synthesizer to Gemini 2.5 Pro
+
+**Date:** April 2026 **Status:** Accepted
+
+**Decision:** Route all Gemini usage (synthesizer + embeddings) through Google Cloud Vertex AI instead of the Google AI Studio API. Simultaneously upgrade the synthesizer model from Gemini 2.5 Flash to Gemini 2.5 Pro.
+
+**Context:** The project was using the Google AI Studio API (`GEMINI_API_KEY`) for both the Response Synthesizer (Node 9) and RAG embeddings (Node 7). GCP signup credits ($300) were available on the `stock-insight-agent` project but are scoped to GCP services — they do not apply to Google AI Studio billing. Routing through Vertex AI unlocks these credits and eliminates the cost constraint on model quality. Gemini 2.5 Pro is the most capable model in the Gemini family; upgrading from Flash is appropriate now that cost is no longer a constraint.
+
+**Options Considered:**
+
+- **Stay on AI Studio (status quo):** No setup changes. Credits remain unused. Free tier rate limits apply.
+- **Migrate to Vertex AI, keep Gemini 2.5 Flash:** Uses credits, same model quality.
+- **Migrate to Vertex AI, upgrade to Gemini 2.5 Pro:** Uses credits, materially better synthesis quality for analyst briefs.
+- **Switch synthesizer to Claude (Vertex AI Model Garden):** Also available via Vertex AI. Deferred — see planned experiment in project notes.
+
+**Choice and Rationale:** Vertex AI with Gemini 2.5 Pro. Both `langchain-google-genai` and `google-genai` support Vertex AI natively via a `vertexai=True` flag — no package swap required. Auth switches from API key to Application Default Credentials (ADC), which is the standard GCP auth pattern. The `thinking_budget` is increased from 1024 to 2048 tokens; Pro benefits more from deeper reasoning passes given its larger capacity. The embedding model (`gemini-embedding-001`) is unchanged — only the client initialization differs (drop `models/` prefix for Vertex AI model naming).
+
+**Tradeoffs Accepted:** `GEMINI_API_KEY` removed; replaced by `GOOGLE_CLOUD_PROJECT` + `GOOGLE_CLOUD_LOCATION`. Local development now requires `gcloud auth application-default login`. CI/CD and production deployments will require a service account with Vertex AI permissions. `sentence-transformers` removed from requirements.txt — it was never imported in code; its presence was causing a spurious PyTorch version warning in the test runner.

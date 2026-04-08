@@ -20,7 +20,9 @@ Chunk IDs: {ticker}-{filing_type}-{period}-chunk-{N:03d}
   e.g. NVDA-10Q-2024Q2-chunk-014 — ChromaDB treats duplicate IDs as no-ops.
 
 External dependencies:
-  - GEMINI_API_KEY env var (required; node returns error if absent)
+  - GOOGLE_CLOUD_PROJECT env var (required; node returns error if absent)
+  - GOOGLE_CLOUD_LOCATION env var (default: us-central1)
+  - Auth: Application Default Credentials — run `gcloud auth application-default login`
   - CHROMA_PERSIST_DIR env var (default: data/vector_store)
   - SEC EDGAR public API (no auth; User-Agent header required)
 """
@@ -48,7 +50,7 @@ logger = logging.getLogger(__name__)
 
 CHROMA_PERSIST_DIR = os.getenv("CHROMA_PERSIST_DIR", "data/vector_store")
 COLLECTION_NAME = "sec_filings_gemini_embedding_001"
-EMBEDDING_MODEL = "models/gemini-embedding-001"
+EMBEDDING_MODEL = "gemini-embedding-001"
 EDGAR_BASE = "https://data.sec.gov"
 EDGAR_SUBMISSIONS = "https://data.sec.gov/submissions/CIK{cik}.json"
 EDGAR_TICKERS_URL = "https://www.sec.gov/files/company_tickers.json"
@@ -147,7 +149,11 @@ def _chunk_text(text: str, ticker: str, filing_type: str, period: str) -> list[d
 # ---------------------------------------------------------------------------
 
 def _get_genai_client() -> genai.Client:
-    return genai.Client(api_key=os.getenv("GEMINI_API_KEY"))
+    return genai.Client(
+        vertexai=True,
+        project=os.getenv("GOOGLE_CLOUD_PROJECT"),
+        location=os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1"),
+    )
 
 
 def _embed_texts(texts: list[str]) -> list[list[float]]:
@@ -470,10 +476,10 @@ def retrieve_rag_context(state: AgentState) -> AgentState:
         logger.debug("retrieve_rag_context: no date range for %s, skipping", ticker)
         return {"filing_chunks": [], "filing_ingested": False, "filing_error": None}
 
-    gemini_api_key = os.getenv("GEMINI_API_KEY")
-    if not gemini_api_key:
-        logger.warning("retrieve_rag_context: GEMINI_API_KEY not set")
-        return {"filing_chunks": [], "filing_ingested": False, "filing_error": "GEMINI_API_KEY not configured"}
+    gcp_project = os.getenv("GOOGLE_CLOUD_PROJECT")
+    if not gcp_project:
+        logger.warning("retrieve_rag_context: GOOGLE_CLOUD_PROJECT not set")
+        return {"filing_chunks": [], "filing_ingested": False, "filing_error": "GOOGLE_CLOUD_PROJECT not configured"}
 
     try:
         collection = _get_collection()

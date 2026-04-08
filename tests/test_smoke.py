@@ -7,7 +7,7 @@ DO NOT run in CI. Run manually before any deployment:
 
     pytest tests/test_smoke.py -m smoke -v -s
 
-To run: ensure GROQ_API_KEY, GEMINI_API_KEY, FINNHUB_API_KEY are set in
+To run: ensure GROQ_API_KEY, GOOGLE_CLOUD_PROJECT, FINNHUB_API_KEY are set in
 your .env file. Tests are excluded from the standard suite (no CI credentials).
 """
 
@@ -79,8 +79,9 @@ async def test_smoke_analyst_brief_has_all_sections():
     # Minimum length — a real analyst note is at least 300 chars
     assert len(response) >= 300, f"Response too short: {len(response)} chars"
 
-    # Must mention the ticker or company name
-    assert "NVDA" in response or "NVIDIA" in response, "Response must reference the company"
+    # Must mention the ticker or company name (model may use any capitalisation)
+    assert any(name in response for name in ("NVDA", "NVIDIA", "Nvidia", "nvidia")), \
+        "Response must reference the company"
 
     # Must contain at least one inline citation if news was retrieved
     news_articles = final.get("news_articles") or []

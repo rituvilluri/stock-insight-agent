@@ -6,7 +6,8 @@ from langchain_google_genai import ChatGoogleGenerativeAI
 load_dotenv()
 
 _groq_key = os.getenv("GROQ_API_KEY")
-_gemini_key = os.getenv("GEMINI_API_KEY")
+_gcp_project = os.getenv("GOOGLE_CLOUD_PROJECT")
+_gcp_location = os.getenv("GOOGLE_CLOUD_LOCATION", "us-central1")
 
 # Used by classifier/extractor nodes (Intent, Ticker, Date).
 # temperature=0 → deterministic JSON output; no creativity needed here.
@@ -20,18 +21,21 @@ llm_classifier = ChatGroq(
 )
 
 # Used by the Response Synthesizer (Node 9).
-# Gemini 2.5 Flash: reasoning model for narrative synthesis across multi-source data.
+# Gemini 2.5 Pro: most capable Gemini model; stronger reasoning for multi-source synthesis.
 # temperature=0.3 → slight variation for natural-sounding prose.
 # max_output_tokens=4096 → analyst briefs need room for substantive analysis.
-# thinking_budget=1024 → enables internal reasoning so the model connects data
-#   points (price action ↔ news ↔ catalysts) rather than just reciting them.
+# thinking_budget=2048 → doubled from Flash baseline; Pro benefits from deeper reasoning
+#   passes when connecting price action ↔ news ↔ catalysts ↔ SEC filings.
+# vertexai=True → routes through Vertex AI (ADC auth) instead of AI Studio API key.
 # streaming=True → enables token-by-token delivery via astream_events.
 llm_synthesizer = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
+    model="gemini-2.5-pro",
     temperature=0.3,
     max_output_tokens=4096,
-    thinking_budget=1024,
-    google_api_key=_gemini_key,
+    thinking_budget=2048,
+    vertexai=True,
+    project=_gcp_project,
+    location=_gcp_location,
     streaming=True,
 )
 
