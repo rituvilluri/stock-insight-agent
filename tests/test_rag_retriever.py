@@ -75,14 +75,14 @@ def test_no_end_date_returns_empty():
     assert result["filing_chunks"] == []
 
 
-def test_missing_gemini_key_uses_fallback():
-    """When GEMINI_API_KEY is absent, the node returns early with a descriptive
+def test_missing_gcp_project_uses_fallback():
+    """When GOOGLE_CLOUD_PROJECT is absent, the node returns early with a descriptive
     filing_error rather than attempting to embed or query ChromaDB."""
-    env_without_key = {k: v for k, v in os.environ.items() if k != "GEMINI_API_KEY"}
+    env_without_key = {k: v for k, v in os.environ.items() if k != "GOOGLE_CLOUD_PROJECT"}
     with patch.dict(os.environ, env_without_key, clear=True):
         result = retrieve_rag_context(BASE_STATE)
     assert result["filing_chunks"] == []
-    assert result["filing_error"] == "GEMINI_API_KEY not configured"
+    assert result["filing_error"] == "GOOGLE_CLOUD_PROJECT not configured"
 
 
 # ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ def test_missing_gemini_key_uses_fallback():
 @patch("agent.graph.nodes.rag_retriever.genai")
 @patch("agent.graph.nodes.rag_retriever._get_collection")
 @patch("agent.graph.nodes.rag_retriever._embed_query")
-@patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+@patch.dict(os.environ, {"GOOGLE_CLOUD_PROJECT": "test-project"})
 def test_cache_hit_returns_chunks_without_edgar(mock_embed_q, mock_get_col, mock_genai):
     mock_embed_q.return_value = [0.1] * 768
 
@@ -117,7 +117,7 @@ def test_cache_hit_returns_chunks_without_edgar(mock_embed_q, mock_get_col, mock
 @patch("agent.graph.nodes.rag_retriever.genai")
 @patch("agent.graph.nodes.rag_retriever._get_collection")
 @patch("agent.graph.nodes.rag_retriever._embed_query")
-@patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+@patch.dict(os.environ, {"GOOGLE_CLOUD_PROJECT": "test-project"})
 def test_cache_hit_does_not_call_edgar(mock_embed_q, mock_get_col, mock_genai):
     """When cache has results, EDGAR should not be called."""
     mock_embed_q.return_value = [0.1] * 768
@@ -146,7 +146,7 @@ def test_cache_hit_does_not_call_edgar(mock_embed_q, mock_get_col, mock_genai):
 @patch("agent.graph.nodes.rag_retriever._get_cik")
 @patch("agent.graph.nodes.rag_retriever._discover_filings")
 @patch("agent.graph.nodes.rag_retriever._ingest_filing")
-@patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+@patch.dict(os.environ, {"GOOGLE_CLOUD_PROJECT": "test-project"})
 def test_cache_miss_triggers_ingestion(
     mock_ingest, mock_discover, mock_cik, mock_embed_q, mock_get_col, mock_genai
 ):
@@ -185,7 +185,7 @@ def test_cache_miss_triggers_ingestion(
 @patch("agent.graph.nodes.rag_retriever._embed_query")
 @patch("agent.graph.nodes.rag_retriever._get_cik")
 @patch("agent.graph.nodes.rag_retriever._discover_filings")
-@patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+@patch.dict(os.environ, {"GOOGLE_CLOUD_PROJECT": "test-project"})
 def test_ingest_sets_filing_ingested_true(
     mock_discover, mock_cik, mock_embed_q, mock_get_col, mock_genai
 ):
@@ -223,7 +223,7 @@ def test_ingest_sets_filing_ingested_true(
 @patch("agent.graph.nodes.rag_retriever._get_collection")
 @patch("agent.graph.nodes.rag_retriever._embed_query")
 @patch("agent.graph.nodes.rag_retriever._get_cik")
-@patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+@patch.dict(os.environ, {"GOOGLE_CLOUD_PROJECT": "test-project"})
 def test_cik_not_found_returns_empty(mock_cik, mock_embed_q, mock_get_col, mock_genai):
     mock_embed_q.return_value = [0.1] * 768
     mock_cik.return_value = None
@@ -243,7 +243,7 @@ def test_cik_not_found_returns_empty(mock_cik, mock_embed_q, mock_get_col, mock_
 @patch("agent.graph.nodes.rag_retriever._embed_query")
 @patch("agent.graph.nodes.rag_retriever._get_cik")
 @patch("agent.graph.nodes.rag_retriever._discover_filings")
-@patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+@patch.dict(os.environ, {"GOOGLE_CLOUD_PROJECT": "test-project"})
 def test_no_filings_in_range_returns_empty(
     mock_discover, mock_cik, mock_embed_q, mock_get_col, mock_genai
 ):
@@ -263,7 +263,7 @@ def test_no_filings_in_range_returns_empty(
 
 @patch("agent.graph.nodes.rag_retriever.genai")
 @patch("agent.graph.nodes.rag_retriever._get_collection")
-@patch.dict(os.environ, {"GEMINI_API_KEY": "test-key"})
+@patch.dict(os.environ, {"GOOGLE_CLOUD_PROJECT": "test-project"})
 def test_exception_sets_filing_error(mock_get_col, mock_genai):
     """An unhandled exception inside the node should set filing_error."""
     mock_get_col.side_effect = RuntimeError("disk full")

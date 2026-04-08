@@ -7,10 +7,13 @@
 
 /* ── Base ─────────────────────────────────────────────────────────────── */
 
+/* Chainlit's bundled CSS loads after this file and wins the cascade.
+   !important is required here — this is intentional theme overriding. */
+html,
 body {
-    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
-    background-color: #0f1117;
-    color: #e6edf3;
+    background-color: #0f1117 !important;
+    color: #e6edf3 !important;
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
 }
 
 /* ── Message step containers ──────────────────────────────────────────── */
@@ -42,6 +45,18 @@ body {
 [data-testid="chat-input"]:focus-within {
     border-color: #00c896 !important;
     box-shadow: 0 0 0 3px rgba(0, 200, 150, 0.12) !important;
+}
+
+textarea,
+input,
+[data-testid="chat-input"] textarea,
+[data-testid="chat-input"] input {
+    color: #1a1a1a !important;
+}
+
+textarea::placeholder,
+input::placeholder {
+    color: #888888 !important;
 }
 
 /* ── Scrollbar ────────────────────────────────────────────────────────── */

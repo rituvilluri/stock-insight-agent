@@ -83,10 +83,11 @@ Three distinct roles — never swap models between roles without updating this s
   - Nodes: Intent Classifier (1), Ticker Resolver (2), Date Parser (3), Reddit/Stocktwits sentiment batches (6)
   - Produces structured JSON; fast and cheap
 
-- **`llm_synthesizer`** — Google Gemini 2.5 Flash, temperature=0.3, max_output_tokens=4096, thinking_budget=1024
+- **`llm_synthesizer`** — Google Gemini 2.5 Pro (Vertex AI), temperature=0.3, max_output_tokens=4096, thinking_budget=2048
   - Node: Response Synthesizer (9)
   - Streaming enabled; Chainlit handles Gemini thinking-chunk format
-  - `thinking_budget=1024` gives the model an internal reasoning pass before the final response
+  - `thinking_budget=2048` gives the model an internal reasoning pass before the final response
+  - Auth via Application Default Credentials (ADC) — no API key required
 
 - **`llm_planner`** (Phase 5, new) — Groq `llama-3.1-8b-instant`, temperature=0, max_tokens=512
   - Node: Retrieval Planning Node
@@ -110,7 +111,11 @@ Available integrations — use these proactively when the task maps to their dom
 ```
 # Required
 GROQ_API_KEY=                    # llm_classifier + Node 6 sentiment batches
-GEMINI_API_KEY=                  # llm_synthesizer (Gemini 2.5 Flash) + RAG embeddings
+
+# Google Cloud (Vertex AI) — llm_synthesizer (Gemini 2.5 Pro) + RAG embeddings
+# Auth: Application Default Credentials — run `gcloud auth application-default login`
+GOOGLE_CLOUD_PROJECT=            # GCP project ID (e.g. stock-insight-agent)
+GOOGLE_CLOUD_LOCATION=           # Vertex AI region (e.g. us-central1)
 
 # Data — Node 4
 ALPHA_VANTAGE_API_KEY=           # Optional — fallback price data when yfinance fails

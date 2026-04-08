@@ -18,7 +18,6 @@ requests~=2.32.4
 # Vector Store and Embeddings
 chromadb
 google-genai
-sentence-transformers
 
 # UI and Visualization
 chainlit
