@@ -47,3 +47,9 @@ htmlcov/
 
 # Salesforce DX (unrelated tooling — not part of this project)
 .sfdx/
+
+# Playwright MCP browser session logs and snapshots (Claude Code runtime artifacts)
+.playwright-mcp/
+
+# Firecrawl session artifacts (research scratch data, not source code)
+.firecrawl/
